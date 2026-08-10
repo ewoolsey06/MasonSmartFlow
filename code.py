@@ -135,7 +135,7 @@ green_bridge = df[
 
 if green_bridge.empty:
     st.error("Green Bridge sensor 22406680-1 not found.")
-    st.stop()
+   
 
 green_bridge = green_bridge.sort_values("timestamp")
 green_bridge["timestamp"] = pd.to_datetime(
@@ -177,7 +177,7 @@ mason_pond = df[
 
 if mason_pond.empty:
     st.error("Mason Pond sensor 22406678-1 not found.")
-    st.stop()   
+    
 
 mason_pond = mason_pond.sort_values("timestamp")
 mason_pond["timestamp"] = pd.to_datetime(
