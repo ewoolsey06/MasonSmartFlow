@@ -1,3 +1,5 @@
+
+
 import requests
 import pandas as pd
 import plotly.graph_objects as go
@@ -6,7 +8,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 
-st.title("LI-COR Device Data Dashboard")
+st.title("Fairfax Campus Rainfall and Water Depth Data")
 
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 
@@ -111,22 +113,6 @@ if df.empty:
     st.text("No data returned from any devices.")
     st.stop()
 
-# Rain sensor
-rain_total = df[
-    df["sensor_sn"] == "22334782-1"
-].copy()
-
-if rain_total.empty:
-    st.error("Rain sensor 22334782-1 not found.")
-    st.stop()
-
-rain_total = rain_total.sort_values("timestamp")
-
-rain_total["timestamp"] = pd.to_datetime(
-    rain_total["timestamp"]
-)
-
-rain_total = rain_total.set_index("timestamp")
 
 #Green Bridge Sensor
 green_bridge = df[
@@ -135,7 +121,7 @@ green_bridge = df[
 
 if green_bridge.empty:
     st.error("Green Bridge sensor 22406680-1 not found.")
-   
+    
 
 green_bridge = green_bridge.sort_values("timestamp")
 green_bridge["timestamp"] = pd.to_datetime(
@@ -150,7 +136,7 @@ gb_fig.add_trace(go.Scatter(
     y=green_bridge["value"],
     mode='lines',
     name='Green Bridge',
-    line=dict(color='#1f77b4', width=0.75)
+    line=dict(color='#005138', width=0.75)
 ))
 
 gb_fig.update_layout(
@@ -165,11 +151,6 @@ gb_fig.update_layout(
 )
 
 
-#st.subheader("Green Bridge Sensor Data")
-#st.plotly_chart(gb_fig, use_container_width=True)
-
-
-
 #Mason Pond Sensor
 mason_pond = df[
     df["sensor_sn"] == "22406678-1"
@@ -177,7 +158,7 @@ mason_pond = df[
 
 if mason_pond.empty:
     st.error("Mason Pond sensor 22406678-1 not found.")
-    
+      
 
 mason_pond = mason_pond.sort_values("timestamp")
 mason_pond["timestamp"] = pd.to_datetime(
@@ -191,7 +172,7 @@ mp_fig.add_trace(go.Scatter(
     y=mason_pond["value"],
     mode='lines',
     name='Mason Pond',
-    line=dict(color='#1f77b4', width=0.75)
+    line=dict(color='#005138', width=0.75)
 ))
 mp_fig.update_layout(
     title="Mason Pond Data",
@@ -211,6 +192,9 @@ mp_fig.update_layout(
 the_hub = df[
     df["sensor_sn"] == "22508090-1"
 ].copy()
+if the_hub.empty:
+    st.error("The Hub sensor 22508090-1 not found.")
+
 the_hub = the_hub.sort_values("timestamp")
 the_hub["timestamp"] = pd.to_datetime(
     the_hub["timestamp"]
@@ -223,7 +207,7 @@ th_fig.add_trace(go.Scatter(
     y=the_hub["value"],
     mode='lines',
     name='The Hub',
-    line=dict(color='#1f77b4', width=0.75)
+    line=dict(color='#005138', width=0.75)
 ))
 th_fig.update_layout(
     title="The Hub Data",
@@ -246,6 +230,119 @@ locations_df=pd.DataFrame({
         'lon': [ -77.30703, -77.310372, -77.30398]
     })
 
+
+# Rain sensor
+rain_total = df[
+    df["sensor_sn"] == "22334782-1"
+].copy()
+
+if rain_total.empty:
+    st.error("Rain sensor 22334782-1 not found.")
+    
+
+rain_total = rain_total.sort_values("timestamp")
+
+rain_total["timestamp"] = pd.to_datetime(
+    rain_total["timestamp"]
+)
+
+rain_total = rain_total.set_index("timestamp")
+
+
+# Plot
+rt_fig = go.Figure()
+
+rt_fig.add_trace(go.Bar(
+    x=rain_total.index,
+    y=rain_total["value"],
+    name='Rainfall',
+    marker=dict(
+        color='#005138',
+        line=dict(color='#005138', width=1),
+        opacity=1
+    ),
+    opacity=1
+))
+
+rt_fig.update_layout(
+    title="Rainfall Totals",
+    xaxis_title="Day (last week)",
+    yaxis_title="Rain (in)",
+    hovermode='x unified',
+    width=1000,
+    height=400,
+    template='plotly_white',
+    paper_bgcolor='white',
+    plot_bgcolor='white'
+)
+
+
+# Accumulated Rain sensor
+rain_acc = df[
+    df["sensor_sn"] == "22334782-2"
+].copy()
+
+if rain_acc.empty:
+    st.error("Accumulated Rain sensor 22334782-2 not found.")
+    st.stop()
+
+rain_acc = rain_acc.sort_values("timestamp")
+
+rain_acc["timestamp"] = pd.to_datetime(
+    rain_acc["timestamp"]
+)
+
+rain_acc = rain_acc.set_index("timestamp")
+
+
+
+# Plot
+ra_fig = go.Figure()
+
+ra_fig.add_trace(go.Bar(
+    x=rain_acc.index,
+    y=rain_acc["value"],
+    name='Rainfall',
+    marker=dict(
+        color='#005138',
+        line=dict(color='#005138', width=1),
+        opacity=1
+    ),
+    opacity=1
+))
+
+ra_fig.update_layout(
+    title="Accumulated Rainfall Totals",
+    xaxis_title="Day (last week)",
+    yaxis_title="Accumulated Rain (in)",
+    hovermode='x unified',
+    width=1000,
+    height=400,
+    template='plotly_white',
+    paper_bgcolor='white',
+    plot_bgcolor='white'
+)
+
+st.markdown(
+    """
+    <style>
+    :root {
+        --st-primary-color: #005138 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+st.subheader("Rainfall / Device Analytics")
+rain_tab, acc_tab = st.tabs(["Total Rain", "Accumulated Rain"])
+
+with rain_tab:
+    st.plotly_chart(rt_fig, width='stretch')
+
+with acc_tab:
+    st.plotly_chart(ra_fig, width='stretch')
 
 st.subheader("Fairfax Campus Sensor Location Map")
 st.write("Click on any marker on the map to view the sensor's name and to display its specific water depth data")
@@ -310,96 +407,11 @@ if selected_location is not None:
     st.subheader(f"{selected_location} Water Depth")
 
     if selected_location == "Green Bridge":
-        st.plotly_chart(gb_fig, use_container_width=True)
+        st.plotly_chart(gb_fig, width='stretch')
     elif selected_location == "Mason Pond":
-        st.plotly_chart(mp_fig, use_container_width=True)
+        st.plotly_chart(mp_fig, width='stretch')
     elif selected_location == "The Hub":
-        st.plotly_chart(th_fig, use_container_width=True)
+        st.plotly_chart(th_fig, width='stretch')
 
 
-
-
-
-# Plot
-rt_fig = go.Figure()
-
-rt_fig.add_trace(go.Scatter(
-    x=rain_total.index,
-    y=rain_total["value"],
-    mode='lines',
-    name='Rainfall',
-    line=dict(color='#1f77b4')
-))
-
-rt_fig.update_layout(
-    title="Rainfall Totals",
-    xaxis_title="Day (last week)",
-    yaxis_title="Rain (in)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white'
-)
-
-
-# Accumulated Rain sensor
-rain_acc = df[
-    df["sensor_sn"] == "22334782-2"
-].copy()
-
-if rain_acc.empty:
-    st.error("Accumulated Rain sensor 22334782-2 not found.")
-    st.stop()
-
-rain_acc = rain_acc.sort_values("timestamp")
-
-rain_acc["timestamp"] = pd.to_datetime(
-    rain_acc["timestamp"]
-)
-
-rain_acc = rain_acc.set_index("timestamp")
-
-
-
-# Plot
-ra_fig = go.Figure()
-
-ra_fig.add_trace(go.Scatter(
-    x=rain_acc.index,
-    y=rain_acc["value"],
-    mode='lines',
-    name='Rainfall',
-    line=dict(color='#1f77b4')
-))
-
-ra_fig.update_layout(
-    title="Accumulated Rainfall Totals",
-    xaxis_title="Day (last week)",
-    yaxis_title="Accumulated Rain (in)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white'
-)
-
-st.markdown(
-    """
-    <style>
-    :root {
-        --st-primary-color: #005138 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-st.subheader("Rainfall / Device Analytics")
-rain_tab, acc_tab = st.tabs(["Total Rain", "Accumulated Rain"])
-
-with rain_tab:
-    st.plotly_chart(rt_fig, use_container_width=True)
-
-with acc_tab:
-    st.plotly_chart(ra_fig, use_container_width=True)
 
