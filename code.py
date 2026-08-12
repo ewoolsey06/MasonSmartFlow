@@ -8,7 +8,7 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 
-st.title("Fairfax Campus Rainfall and Water Depth Data")
+st.title("Living Lab Smart Flow: Fairfax Campus Rainfall and Water Depth Data")
 
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 
@@ -345,7 +345,7 @@ with acc_tab:
     st.plotly_chart(ra_fig, width='stretch')
 
 st.subheader("Fairfax Campus Sensor Location Map")
-st.write("Click on any marker on the map to view the sensor's name and to display its specific water depth data")
+st.write("Click on any marker on the map or use the buttonsto view the sensor's name and to display its specific water depth data")
 
 center_lat = locations_df["lat"].mean()
 center_lon = locations_df["lon"].mean()
@@ -370,38 +370,55 @@ for _, row in locations_df.iterrows():
     ).add_to(m)
 
 
+# Render buttons next to the map using columns
+if "selected_location" not in st.session_state:
+    st.session_state["selected_location"] = None
+if "button_clicked" not in st.session_state:
+    st.session_state["button_clicked"] = False
+
+def set_selected(location: str):
+    st.session_state["selected_location"] = location
+    st.session_state["button_clicked"] = True
+
+left_col, right_col = st.columns([1, 3])
+
+with left_col:
+    st.markdown("### Select Sensor")
+    st.button("Green Bridge", key="inline_green", on_click=set_selected, args=("Green Bridge",))
+    st.button("Mason Pond", key="inline_mason", on_click=set_selected, args=("Mason Pond",))
+    st.button("The Hub", key="inline_hub", on_click=set_selected, args=("The Hub",))
+
+    selection_placeholder = st.empty()
+
+with right_col:
+    map_data = st_folium(m, width="100%", height=450, key="map")
 
 
-map_data = st_folium(m, width="100%", height=450, key="map")
 
 
-def get_clicked_location(data, locations):
-    if not data:
-        return None
-
-    for key in ["last_clicked", "last_object_clicked"]:
-        candidate = data.get(key)
-        if not isinstance(candidate, dict):
-            continue
-
-        lat = candidate.get("lat") or candidate.get("latitude")
-        lon = candidate.get("lng") or candidate.get("lon") or candidate.get("longitude")
-
-        if lat is None or lon is None:
-            continue
-
-        matches = locations[
-            (locations["lat"].sub(lat).abs() < 0.0005) &
-            (locations["lon"].sub(lon).abs() < 0.0005)
+if st.session_state["button_clicked"]:
+    st.session_state["button_clicked"] = False 
+    
+else:
+    if map_data and map_data.get("last_object_clicked"):
+        loc = map_data["last_object_clicked"]
+        
+        matches = locations_df[
+            (locations_df["lat"].sub(loc.get("lat", 0)).abs() < 0.0005) &
+            (locations_df["lon"].sub(loc.get("lng", 0)).abs() < 0.0005)
         ]
-
+        
         if not matches.empty:
-            return matches.iloc[0]["name"]
-
-    return None
+            st.session_state["selected_location"] = matches.iloc[0]["name"]
 
 
-selected_location = get_clicked_location(map_data, locations_df)
+if st.session_state.get("selected_location"):
+    selection_placeholder.write(f"**Selected:** {st.session_state['selected_location']}")
+
+
+
+
+selected_location = st.session_state.get("selected_location")
 
 if selected_location is not None:
     st.subheader(f"{selected_location} Water Depth")
@@ -412,6 +429,4 @@ if selected_location is not None:
         st.plotly_chart(mp_fig, width='stretch')
     elif selected_location == "The Hub":
         st.plotly_chart(th_fig, width='stretch')
-
-
 
