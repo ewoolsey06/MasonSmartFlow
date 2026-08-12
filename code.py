@@ -219,15 +219,133 @@ th_fig.update_layout(
     template='plotly_white',
     yaxis=dict(range=[-0.01, 0.8])
 )
-#st.subheader("The Hub Sensor Data")
-#st.plotly_chart(th_fig, use_container_width=True)
+
+#The RAC Sensor
+rac_sensor = df[
+    df["sensor_sn"] == "22308166-1"
+].copy()
+if rac_sensor.empty:
+    st.error("The RAC sensor 22308166-1 not found.")
+rac_sensor = rac_sensor.sort_values("timestamp")
+rac_sensor["timestamp"] = pd.to_datetime(
+    rac_sensor["timestamp"]
+)
+rac_sensor = rac_sensor.set_index("timestamp")
+rac_fig = go.Figure()
+rac_fig.add_trace(go.Scatter(
+    x=rac_sensor.index,
+    y=rac_sensor["value"],
+    mode='lines',
+    name='RAC Sensor',
+    line=dict(color='#005138', width=0.75)
+))
+rac_fig.update_layout(
+    title="RAC Sensor Data",
+    xaxis_title="Day (last week)",
+    yaxis_title="Water Depth (ft)",
+    hovermode='x unified',
+    width=1000,
+    height=400,
+    template='plotly_white',
+    yaxis=dict(range=[-0.01, 0.8])
+)
+
+# Lot C #1 sensor
+lot_c1 = df[
+    df["sensor_sn"] == "22308168-1"
+].copy()
+if lot_c1.empty:
+    st.error("Lot C #1 sensor 22308168-1 not found.")
+lot_c1 = lot_c1.sort_values("timestamp")
+lot_c1["timestamp"] = pd.to_datetime(
+    lot_c1["timestamp"]
+)
+lot_c1 = lot_c1.set_index("timestamp")
+lot_c1_fig = go.Figure()
+lot_c1_fig.add_trace(go.Scatter(
+    x=lot_c1.index,
+    y=lot_c1["value"],
+    mode='lines',
+    name='Lot C #1 Sensor',
+    line=dict(color='#005138', width=0.75)
+))
+lot_c1_fig.update_layout(
+    title="Lot C #1 Sensor Data",
+    xaxis_title="Day (last week)",
+    yaxis_title="Water Depth (ft)",
+    hovermode='x unified',
+    width=1000,
+    height=400,
+    template='plotly_white',
+    yaxis=dict(range=[-0.01, 0.8])
+)
+
+#Lot C #2 sensor
+lot_c2 = df[
+    df["sensor_sn"] == "22406679-1"
+].copy()
+if lot_c2.empty:
+    st.error("Lot C #2 sensor 22406679-1 not found.")
+lot_c2 = lot_c2.sort_values("timestamp")
+lot_c2["timestamp"] = pd.to_datetime(
+    lot_c2["timestamp"]
+)
+lot_c2 = lot_c2.set_index("timestamp")
+lot_c2_fig = go.Figure()
+lot_c2_fig.add_trace(go.Scatter(
+    x=lot_c2.index,
+    y=lot_c2["value"],
+    mode='lines',
+    name='Lot C #2 Sensor',
+    line=dict(color='#005138', width=0.75)
+))
+lot_c2_fig.update_layout(
+    title="Lot C #2 Sensor Data",
+    xaxis_title="Day (last week)",
+    yaxis_title="Water Depth (ft)",
+    hovermode='x unified',
+    width=1000,
+    height=400,
+    template='plotly_white',
+    yaxis=dict(range=[-0.01, 0.8])
+)
+
+# Aquatic Center sensor
+aquatic_center = df[
+    df["sensor_sn"] == "22406677-1"
+].copy()
+if aquatic_center.empty:
+    st.error("Aquatic Center sensor 22406677-1 not found.")
+aquatic_center = aquatic_center.sort_values("timestamp")
+aquatic_center["timestamp"] = pd.to_datetime(
+    aquatic_center["timestamp"]
+)
+aquatic_center = aquatic_center.set_index("timestamp")
+aquatic_center_fig = go.Figure()
+aquatic_center_fig.add_trace(go.Scatter(
+    x=aquatic_center.index,
+    y=aquatic_center["value"],
+    mode='lines',
+    name='Aquatic Center Sensor',
+    line=dict(color='#005138', width=0.75)
+))
+aquatic_center_fig.update_layout(
+    title="Aquatic Center Sensor Data",
+    xaxis_title="Day (last week)",
+    yaxis_title="Water Depth (ft)",
+    hovermode='x unified',
+    width=1000,
+    height=400,
+    template='plotly_white',
+    yaxis=dict(range=[-0.01, 0.8])
+)
 
 #Map
 
 locations_df=pd.DataFrame({
-        'name': ['Green Bridge', 'Mason Pond', 'The Hub'],
-        'lat': [38.827153, 38.829022, 38.83019],
-        'lon': [ -77.30703, -77.310372, -77.30398]
+        'name': ['Green Bridge', 'Mason Pond', 'The Hub', 'RAC Sensor', 'Lot C #1', 'Lot C #2', 'Aquatic Center'],
+        'lat': [38.827153, 38.829022, 38.83019, 38.830625, 38.825383,38.825994,38.826328],
+        'lon': [ -77.30703, -77.310372, -77.30398, -77.310689, -77.303769, -77.304797, -77.303419]
     })
 
 
@@ -387,14 +505,19 @@ with left_col:
     st.button("Green Bridge", key="inline_green", on_click=set_selected, args=("Green Bridge",))
     st.button("Mason Pond", key="inline_mason", on_click=set_selected, args=("Mason Pond",))
     st.button("The Hub", key="inline_hub", on_click=set_selected, args=("The Hub",))
+    st.button("RAC Sensor", key="inline rac", on_click=set_selected, args=("RAC Sensor",))
+    st.button("Lot C #1", key="inline_lot_c1", on_click=set_selected, args=("Lot C #1",))
+    st.button("Lot C #2", key="inline_lot_c2", on_click=set_selected, args=("Lot C #2",))
+    st.button("Aquatic Center", key="inline_aquatic_center", on_click=set_selected, args=("Aquatic Center",))
 
+  
     selection_placeholder = st.empty()
 
 with right_col:
     map_data = st_folium(m, width="100%", height=450, key="map")
 
 
-
+# --- MAP CLICK LOGIC ---
 
 if st.session_state["button_clicked"]:
     st.session_state["button_clicked"] = False 
@@ -410,7 +533,6 @@ else:
         
         if not matches.empty:
             st.session_state["selected_location"] = matches.iloc[0]["name"]
-
 
 if st.session_state.get("selected_location"):
     selection_placeholder.write(f"**Selected:** {st.session_state['selected_location']}")
@@ -429,4 +551,11 @@ if selected_location is not None:
         st.plotly_chart(mp_fig, width='stretch')
     elif selected_location == "The Hub":
         st.plotly_chart(th_fig, width='stretch')
-
+    elif selected_location == "RAC Sensor":
+        st.plotly_chart(rac_fig, width='stretch')
+    elif selected_location == "Lot C #1":
+        st.plotly_chart(lot_c1_fig, width='stretch')
+    elif selected_location == "Lot C #2":
+        st.plotly_chart(lot_c2_fig, width='stretch')
+    elif selected_location == "Aquatic Center":
+        st.plotly_chart(aquatic_center_fig, width='stretch')
