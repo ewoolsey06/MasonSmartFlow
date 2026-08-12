@@ -501,23 +501,26 @@ def set_selected(location: str):
 left_col, right_col = st.columns([1, 3])
 
 with left_col:
-    st.markdown("### Select Sensor")
-    st.button("Green Bridge", key="inline_green", on_click=set_selected, args=("Green Bridge",))
-    st.button("Mason Pond", key="inline_mason", on_click=set_selected, args=("Mason Pond",))
-    st.button("The Hub", key="inline_hub", on_click=set_selected, args=("The Hub",))
-    st.button("RAC Sensor", key="inline rac", on_click=set_selected, args=("RAC Sensor",))
-    st.button("Lot C #1", key="inline_lot_c1", on_click=set_selected, args=("Lot C #1",))
-    st.button("Lot C #2", key="inline_lot_c2", on_click=set_selected, args=("Lot C #2",))
-    st.button("Aquatic Center", key="inline_aquatic_center", on_click=set_selected, args=("Aquatic Center",))
+    left_col.markdown(
+        "<p style='margin: 0 0 4px 0; font-size: 1.1rem; font-weight: 600;'>Select Sensor</p>",
+        unsafe_allow_html=True
+    )
+    left_col.button("Green Bridge", key="inline_green", on_click=set_selected, args=("Green Bridge",))
+    left_col.button("Mason Pond", key="inline_mason", on_click=set_selected, args=("Mason Pond",))
+    left_col.button("The Hub", key="inline_hub", on_click=set_selected, args=("The Hub",))
+    left_col.button("RAC Sensor", key="inline_rac", on_click=set_selected, args=("RAC Sensor",))
+    left_col.button("Lot C #1", key="inline_lot_c1", on_click=set_selected, args=("Lot C #1",))
+    left_col.button("Lot C #2", key="inline_lot_c2", on_click=set_selected, args=("Lot C #2",))
+    left_col.button("Aquatic Center", key="inline_aquatic_center", on_click=set_selected, args=("Aquatic Center",))
 
-  
-    selection_placeholder = st.empty()
+    # Keep the selected label inside the same left column
+    selection_placeholder = left_col.empty()
 
 with right_col:
     map_data = st_folium(m, width="100%", height=450, key="map")
 
 
-# --- MAP CLICK LOGIC ---
+
 
 if st.session_state["button_clicked"]:
     st.session_state["button_clicked"] = False 
@@ -533,6 +536,7 @@ else:
         
         if not matches.empty:
             st.session_state["selected_location"] = matches.iloc[0]["name"]
+
 
 if st.session_state.get("selected_location"):
     selection_placeholder.write(f"**Selected:** {st.session_state['selected_location']}")
