@@ -4,3 +4,4 @@ plotly
 streamlit
 folium
 streamlit-folium
+tzdata
