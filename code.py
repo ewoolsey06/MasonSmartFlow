@@ -1,10 +1,14 @@
-import requests
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+import folium
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+import requests
 import streamlit as st
-import folium
 from streamlit_folium import st_folium
+
+# Define Eastern Time Zone (handles both EST and EDT automatically)
+EASTERN_TZ = ZoneInfo("America/New_York")
 
 st.title("Living Lab Smart Flow: Fairfax Campus Rainfall and Water Depth Data")
 
@@ -15,7 +19,7 @@ headers = {
 }
 
 if "data_window" not in st.session_state:
-    end = datetime.now()
+    end = datetime.now(EASTERN_TZ)
     start = end - timedelta(days=8)
     st.session_state["data_window"] = {
         "start": start,
@@ -64,8 +68,6 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
 
 
 def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
-    """Split a start/end datetime range into a list of (chunk_start, chunk_end)
-    windows, each at most chunk_days long."""
     chunks = []
     current = start_dt
     while current < end_dt:
@@ -73,6 +75,40 @@ def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
         chunks.append((current, chunk_end))
         current = chunk_end
     return chunks
+
+
+def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep one reading every 30 minutes, per sensor, anchored to actual clock
+    time (:00 and :30) in Eastern Time.
+    """
+    if df_chunk.empty:
+        return df_chunk
+
+    df_chunk = df_chunk.copy()
+    
+  
+    df_chunk["timestamp"] = (
+        pd.to_datetime(df_chunk["timestamp"], utc=True)
+        .dt.tz_convert(EASTERN_TZ)
+    )
+
+    picked_frames = []
+    for sensor, group in df_chunk.groupby("sensor_sn"):
+        resampled = (
+            group.sort_values("timestamp")
+            .set_index("timestamp")
+            .resample("30min")
+            .first()
+            .dropna(how="all")
+        )
+        resampled["sensor_sn"] = sensor
+        picked_frames.append(resampled.reset_index())
+
+    if not picked_frames:
+        return df_chunk.iloc[0:0]
+
+    return pd.concat(picked_frames, ignore_index=True)
 
 
 @st.cache_data(ttl=3600)
@@ -98,7 +134,13 @@ def load_all_device_data(start_dt: datetime, end_dt: datetime):
             if not data:
                 continue
 
-            all_devices_data.append(pd.DataFrame(data))
+            df_chunk = pd.DataFrame(data)
+            df_chunk = keep_half_hour_marks(df_chunk)
+
+            if df_chunk.empty:
+                continue
+
+            all_devices_data.append(df_chunk)
 
     if not all_devices_data:
         return pd.DataFrame()
@@ -120,234 +162,95 @@ if df.empty:
     st.stop()
 
 
-#Green Bridge Sensor
-green_bridge = df[
-    df["sensor_sn"] == "22406680-1"
-].copy()
+# Water depth sensors: name -> sensor_sn
+SENSOR_CONFIG = {
+    "Green Bridge": "22406680-1",
+    "Mason Pond": "22406678-1",
+    "The Hub": "22508090-1",
+    "RAC Sensor": "22308166-1",
+    "Lot C #1": "22308168-1",
+    "Lot C #2": "22406679-1",
+    "Aquatic Center": "22406677-1",
+}
 
-if green_bridge.empty:
-    st.error("Green Bridge sensor 22406680-1 not found.")
-
-green_bridge = green_bridge.sort_values("timestamp")
-green_bridge["timestamp"] = pd.to_datetime(
-    green_bridge["timestamp"]
-)
-green_bridge = green_bridge.set_index("timestamp")
-
-gb_fig = go.Figure()
-
-gb_fig.add_trace(go.Scatter(
-    x=green_bridge.index,
-    y=green_bridge["value"],
-    mode='lines',
-    name='Green Bridge',
-    line=dict(color='#005138', width=0.75)
-))
-
-gb_fig.update_layout(
-    title="Green Bridge Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+RANGE_OPTIONS = {
+    "1 Week": timedelta(days=7),
+    "3 Days": timedelta(days=3),
+    "24 Hours": timedelta(hours=24),
+}
+DEFAULT_RANGE = "3 Days"
 
 
-#Mason Pond Sensor
-mason_pond = df[
-    df["sensor_sn"] == "22406678-1"
-].copy()
+def compute_y_range(values: pd.Series, pad_frac: float = 0.05):
+    """Y-axis range from the min/max of the whole dataset, with a little padding."""
+    if values.empty:
+        return [-0.01, 0.8]
 
-if mason_pond.empty:
-    st.error("Mason Pond sensor 22406678-1 not found.")
+    lo = float(values.min())
+    hi = float(values.max())
 
-mason_pond = mason_pond.sort_values("timestamp")
-mason_pond["timestamp"] = pd.to_datetime(
-    mason_pond["timestamp"]
-)
-mason_pond = mason_pond.set_index("timestamp")
+    if lo == hi:
+        lo -= 0.05
+        hi += 0.05
 
-mp_fig = go.Figure()
-mp_fig.add_trace(go.Scatter(
-    x=mason_pond.index,
-    y=mason_pond["value"],
-    mode='lines',
-    name='Mason Pond',
-    line=dict(color='#005138', width=0.75)
-))
-mp_fig.update_layout(
-    title="Mason Pond Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+    pad = (hi - lo) * pad_frac
+    return [lo - pad, hi + pad]
 
 
-# The Hub Sensor
-the_hub = df[
-    df["sensor_sn"] == "22508090-1"
-].copy()
-if the_hub.empty:
-    st.error("The Hub sensor 22508090-1 not found.")
+def filter_by_range(sensor_df: pd.DataFrame, range_label: str) -> pd.DataFrame:
+    """Slice a sensor's full-range data down to the selected window, anchored
+    to that sensor's own most recent reading."""
+    if sensor_df.empty:
+        return sensor_df
 
-the_hub = the_hub.sort_values("timestamp")
-the_hub["timestamp"] = pd.to_datetime(
-    the_hub["timestamp"]
-)
-the_hub = the_hub.set_index("timestamp")
-
-th_fig = go.Figure()
-th_fig.add_trace(go.Scatter(
-    x=the_hub.index,
-    y=the_hub["value"],
-    mode='lines',
-    name='The Hub',
-    line=dict(color='#005138', width=0.75)
-))
-th_fig.update_layout(
-    title="The Hub Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+    latest = sensor_df.index.max()
+    cutoff = latest - RANGE_OPTIONS.get(range_label, RANGE_OPTIONS[DEFAULT_RANGE])
+    return sensor_df[sensor_df.index >= cutoff]
 
 
-#The RAC Sensor
-rac_sensor = df[
-    df["sensor_sn"] == "22308166-1"
-].copy()
-if rac_sensor.empty:
-    st.error("The RAC sensor 22308166-1 not found.")
-rac_sensor = rac_sensor.sort_values("timestamp")
-rac_sensor["timestamp"] = pd.to_datetime(
-    rac_sensor["timestamp"]
-)
-rac_sensor = rac_sensor.set_index("timestamp")
-rac_fig = go.Figure()
-rac_fig.add_trace(go.Scatter(
-    x=rac_sensor.index,
-    y=rac_sensor["value"],
-    mode='lines',
-    name='RAC Sensor',
-    line=dict(color='#005138', width=0.75)
-))
-rac_fig.update_layout(
-    title="RAC Sensor Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+def build_sensor_figure(sensor_df: pd.DataFrame, name: str, y_range, range_label: str) -> go.Figure:
+    filtered = filter_by_range(sensor_df, range_label)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=filtered.index,
+        y=filtered["value"] if "value" in filtered else [],
+        mode='lines',
+        name=name,
+        line=dict(color='#005138', width=0.75)
+    ))
+    fig.update_layout(
+        title=f"{name} Data ({range_label}) - Eastern Time",
+        xaxis_title=f"Time ({range_label} EST/EDT)",
+        yaxis_title="Water Depth (ft)",
+        hovermode='x unified',
+        width=1000,
+        height=400,
+        template='plotly_white',
+        yaxis=dict(range=y_range)
+    )
+    return fig
 
 
-# Lot C #1 sensor
-lot_c1 = df[
-    df["sensor_sn"] == "22308168-1"
-].copy()
-if lot_c1.empty:
-    st.error("Lot C #1 sensor 22308168-1 not found.")
-lot_c1 = lot_c1.sort_values("timestamp")
-lot_c1["timestamp"] = pd.to_datetime(
-    lot_c1["timestamp"]
-)
-lot_c1 = lot_c1.set_index("timestamp")
-lot_c1_fig = go.Figure()
-lot_c1_fig.add_trace(go.Scatter(
-    x=lot_c1.index,
-    y=lot_c1["value"],
-    mode='lines',
-    name='Lot C #1 Sensor',
-    line=dict(color='#005138', width=0.75)
-))
-lot_c1_fig.update_layout(
-    title="Lot C #1 Sensor Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+sensor_data = {}
+sensor_y_range = {}
 
+for sensor_name, sensor_sn in SENSOR_CONFIG.items():
+    sdf = df[df["sensor_sn"] == sensor_sn].copy()
 
-#Lot C #2 sensor
-lot_c2 = df[
-    df["sensor_sn"] == "22406679-1"
-].copy()
-if lot_c2.empty:
-    st.error("Lot C #2 sensor 22406679-1 not found.")
-lot_c2 = lot_c2.sort_values("timestamp")
-lot_c2["timestamp"] = pd.to_datetime(
-    lot_c2["timestamp"]
-)
-lot_c2 = lot_c2.set_index("timestamp")
-lot_c2_fig = go.Figure()
-lot_c2_fig.add_trace(go.Scatter(
-    x=lot_c2.index,
-    y=lot_c2["value"],
-    mode='lines',
-    name='Lot C #2 Sensor',
-    line=dict(color='#005138', width=0.75)
-))
-lot_c2_fig.update_layout(
-    title="Lot C #2 Sensor Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+    if sdf.empty:
+        st.error(f"{sensor_name} sensor {sensor_sn} not found.")
+        sensor_data[sensor_name] = pd.DataFrame(columns=["value"])
+        sensor_y_range[sensor_name] = [-0.01, 0.8]
+        continue
 
+    sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
+    sdf = sdf.sort_values("timestamp").set_index("timestamp")
 
-# Aquatic Center sensor
-aquatic_center = df[
-    df["sensor_sn"] == "22406677-1"
-].copy()
-if aquatic_center.empty:
-    st.error("Aquatic Center sensor 22406677-1 not found.")
-aquatic_center = aquatic_center.sort_values("timestamp")
-aquatic_center["timestamp"] = pd.to_datetime(
-    aquatic_center["timestamp"]
-)
-aquatic_center = aquatic_center.set_index("timestamp")
-aquatic_center_fig = go.Figure()
-aquatic_center_fig.add_trace(go.Scatter(
-    x=aquatic_center.index,
-    y=aquatic_center["value"],
-    mode='lines',
-    name='Aquatic Center Sensor',
-    line=dict(color='#005138', width=0.75)
-))
-aquatic_center_fig.update_layout(
-    title="Aquatic Center Sensor Data",
-    xaxis_title="Day (last week)",
-    yaxis_title="Water Depth (ft)",
-    hovermode='x unified',
-    width=1000,
-    height=400,
-    template='plotly_white',
-    yaxis=dict(range=[-0.01, 0.8])
-)
+    sensor_data[sensor_name] = sdf
+    sensor_y_range[sensor_name] = compute_y_range(sdf["value"])
 
-
-#Map
+# Map
 locations_df = pd.DataFrame({
     'name': ['Green Bridge', 'Mason Pond', 'The Hub', 'RAC Sensor', 'Lot C #1', 'Lot C #2', 'Aquatic Center'],
     'lat': [38.827153, 38.829022, 38.83019, 38.830625, 38.825383, 38.825994, 38.826328],
@@ -364,11 +267,7 @@ if rain_total.empty:
     st.error("Rain sensor 22334782-1 not found.")
 
 rain_total = rain_total.sort_values("timestamp")
-
-rain_total["timestamp"] = pd.to_datetime(
-    rain_total["timestamp"]
-)
-
+rain_total["timestamp"] = pd.to_datetime(rain_total["timestamp"])
 rain_total = rain_total.set_index("timestamp")
 
 
@@ -388,8 +287,8 @@ rt_fig.add_trace(go.Bar(
 ))
 
 rt_fig.update_layout(
-    title="Rainfall Totals",
-    xaxis_title="Day (last week)",
+    title="Rainfall Totals (Eastern Time)",
+    xaxis_title="Day (last week EST/EDT)",
     yaxis_title="Rain (in)",
     hovermode='x unified',
     width=1000,
@@ -410,11 +309,7 @@ if rain_acc.empty:
     st.stop()
 
 rain_acc = rain_acc.sort_values("timestamp")
-
-rain_acc["timestamp"] = pd.to_datetime(
-    rain_acc["timestamp"]
-)
-
+rain_acc["timestamp"] = pd.to_datetime(rain_acc["timestamp"])
 rain_acc = rain_acc.set_index("timestamp")
 
 
@@ -434,8 +329,8 @@ ra_fig.add_trace(go.Bar(
 ))
 
 ra_fig.update_layout(
-    title="Accumulated Rainfall Totals",
-    xaxis_title="Day (last week)",
+    title="Accumulated Rainfall Totals (Eastern Time)",
+    xaxis_title="Day (last week EST/EDT)",
     yaxis_title="Accumulated Rain (in)",
     hovermode='x unified',
     width=1000,
@@ -497,11 +392,19 @@ if "selected_location" not in st.session_state:
     st.session_state["selected_location"] = None
 if "button_clicked" not in st.session_state:
     st.session_state["button_clicked"] = False
+if "graph_range" not in st.session_state:
+    st.session_state["graph_range"] = DEFAULT_RANGE
 
 
 def set_selected(location: str):
     st.session_state["selected_location"] = location
+    st.session_state["graph_range"] = DEFAULT_RANGE  # reset to 3 Days whenever a new sensor is picked
     st.session_state["button_clicked"] = True
+
+
+def set_graph_range(range_label: str):
+    st.session_state["graph_range"] = range_label
+    st.session_state["button_clicked"] = True  # don't let the map click re-processing override this
 
 
 left_col, right_col = st.columns([1, 3])
@@ -538,7 +441,10 @@ else:
         ]
 
         if not matches.empty:
-            st.session_state["selected_location"] = matches.iloc[0]["name"]
+            clicked_name = matches.iloc[0]["name"]
+            if clicked_name != st.session_state.get("selected_location"):
+                st.session_state["graph_range"] = DEFAULT_RANGE
+            st.session_state["selected_location"] = clicked_name
 
 
 if st.session_state.get("selected_location"):
@@ -550,17 +456,93 @@ selected_location = st.session_state.get("selected_location")
 if selected_location is not None:
     st.subheader(f"{selected_location} Water Depth")
 
-    if selected_location == "Green Bridge":
-        st.plotly_chart(gb_fig, width='stretch')
-    elif selected_location == "Mason Pond":
-        st.plotly_chart(mp_fig, width='stretch')
-    elif selected_location == "The Hub":
-        st.plotly_chart(th_fig, width='stretch')
-    elif selected_location == "RAC Sensor":
-        st.plotly_chart(rac_fig, width='stretch')
-    elif selected_location == "Lot C #1":
-        st.plotly_chart(lot_c1_fig, width='stretch')
-    elif selected_location == "Lot C #2":
-        st.plotly_chart(lot_c2_fig, width='stretch')
-    elif selected_location == "Aquatic Center":
-        st.plotly_chart(aquatic_center_fig, width='stretch')
+    # Custom CSS to shrink buttons and tighten vertical margins
+    st.markdown(
+        """
+        <style>
+        /* Target buttons to shrink height, font, and padding */
+        div[data-testid="column"] button {
+            min-height: 28px !important;
+            height: 28px !important;
+            padding: 0px 8px !important;
+            font-size: 0.8rem !important;
+            line-height: 1 !important;
+            margin-top: -10px !important;
+            margin-bottom: -10px !important;
+        }
+        
+        /* Adjust alignment for the caption label */
+        div[data-testid="column"] div[data-testid="stCaptionContainer"] {
+            margin-top: -6px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    range_col1, range_col2, range_col3, range_col4 = st.columns([1, 1, 1, 3])
+    with range_col1:
+        st.button("1 Week", key="range_1w", on_click=set_graph_range, args=("1 Week",))
+    with range_col2:
+        st.button("3 Days", key="range_3d", on_click=set_graph_range, args=("3 Days",))
+    with range_col3:
+        st.button("24 Hours", key="range_24h", on_click=set_graph_range, args=("24 Hours",))
+    with range_col4:
+        st.caption(f"Showing: {st.session_state['graph_range']}")
+
+    sensor_fig = build_sensor_figure(
+        sensor_data[selected_location],
+        selected_location,
+        sensor_y_range[selected_location],
+        st.session_state["graph_range"]
+    )
+
+    st.plotly_chart(sensor_fig, width='stretch')
+
+    # --- CSV Download Section ---
+    st.markdown("<p style='margin-top: 10px; font-weight: 600;'>Download Data</p>", unsafe_allow_html=True)
+    
+    # Get current sensor DataFrame
+    curr_df = sensor_data[selected_location]
+    
+    # Pre-filter datasets for all 3 time ranges
+    df_1w = filter_by_range(curr_df, "1 Week").reset_index()
+    df_3d = filter_by_range(curr_df, "3 Days").reset_index()
+    df_24h = filter_by_range(curr_df, "24 Hours").reset_index()
+
+    # Format timestamp column for clean CSV output
+    for d in (df_1w, df_3d, df_24h):
+        if not d.empty and "timestamp" in d.columns:
+            d["timestamp"] = d["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    # Clean file name string (e.g., "Green Bridge" -> "green_bridge")
+    safe_name = selected_location.lower().replace(" ", "_").replace("#", "")
+
+    dl_col1, dl_col2, dl_col3, _ = st.columns([1, 1, 1, 3])
+
+    with dl_col1:
+        st.download_button(
+            label="Download 1 Week CSV",
+            data=df_1w.to_csv(index=False).encode('utf-8'),
+            file_name=f"{safe_name}_1week_data.csv",
+            mime="text/csv",
+            key="dl_1w"
+        )
+
+    with dl_col2:
+        st.download_button(
+            label="Download 3 Days CSV",
+            data=df_3d.to_csv(index=False).encode('utf-8'),
+            file_name=f"{safe_name}_3days_data.csv",
+            mime="text/csv",
+            key="dl_3d"
+        )
+
+    with dl_col3:
+        st.download_button(
+            label="Download 24 Hours CSV",
+            data=df_24h.to_csv(index=False).encode('utf-8'),
+            file_name=f"{safe_name}_24hours_data.csv",
+            mime="text/csv",
+            key="dl_24h"
+        )
