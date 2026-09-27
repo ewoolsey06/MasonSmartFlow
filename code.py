@@ -10,7 +10,6 @@ from streamlit_folium import st_folium
 # Define Eastern Time Zone (handles both EST and EDT automatically)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
-st.title("Living Lab Smart Flow: Fairfax Campus Rainfall and Water Depth Data")
 
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 
@@ -352,14 +351,7 @@ st.markdown(
 )
 
 
-st.subheader("Rainfall / Device Analytics")
-rain_tab, acc_tab = st.tabs(["Total Rain", "Accumulated Rain"])
 
-with rain_tab:
-    st.plotly_chart(rt_fig, width='stretch')
-
-with acc_tab:
-    st.plotly_chart(ra_fig, width='stretch')
 
 st.subheader("Fairfax Campus Sensor Location Map")
 st.write("Click on any marker on the map or use the buttons to view the sensor's name and to display its specific water depth data")
@@ -546,3 +538,12 @@ if selected_location is not None:
             mime="text/csv",
             key="dl_24h"
         )
+
+st.subheader("Rainfall / Device Analytics")
+rain_tab, acc_tab = st.tabs(["Total Rain", "Accumulated Rain"])
+
+with rain_tab:
+    st.plotly_chart(rt_fig, width='stretch')
+
+with acc_tab:
+    st.plotly_chart(ra_fig, width='stretch')
