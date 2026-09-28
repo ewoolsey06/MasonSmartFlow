@@ -1,0 +1,26 @@
+name: Keep Streamlit App Awake
+on:
+  schedule:
+    - cron: '0 */8 * * *' # Executes automatically every 8 hours
+  workflow_dispatch: # Keeps manual execution enabled for testing
+
+jobs:
+  wake-streamlit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out project files
+        uses: actions/checkout@v4
+
+      - name: Configure Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Selenium Web Browser Packages
+        run: |
+          pip install selenium webdriver-manager
+
+      - name: Run Script to Wake App Container
+        env:
+          STREAMLIT_APP_URL: "https://YOUR-APP-SUBDOMAIN.streamlit.app"
+        run: python wake_app.py
