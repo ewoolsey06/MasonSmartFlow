@@ -22,5 +22,5 @@ jobs:
 
       - name: Run Script to Wake App Container
         env:
-          STREAMLIT_APP_URL: "https://YOUR-APP-SUBDOMAIN.streamlit.app"
+          STREAMLIT_APP_URL: "https://masonsmartflow-tysg2tcwknuemmwxxcasu3.streamlit.app/"
         run: python wake_app.py
