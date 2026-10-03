@@ -1,8 +1,7 @@
 # fetch_data.py
+import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-import json
-import os
 import pandas as pd
 import requests
 
@@ -12,10 +11,16 @@ headers = {"Authorization": f"Bearer {TOKEN}"}
 
 
 def fetch_devices():
-    res = requests.get(
-        "https://licor.cloud", headers=headers, timeout=30
-    )
-    return res.json().get("devices", []) if res.status_code == 200 else []
+    try:
+        res = requests.get(
+            "https://licor.cloud", headers=headers, timeout=30
+        )
+        if res.status_code == 200:
+            return res.json().get("devices", [])
+        print(f"Devices API warning: Status code {res.status_code}")
+    except Exception as e:
+        print(f"Error fetching devices list: {e}")
+    return []
 
 
 def fetch_device_data(serial: str, start_dt: str, end_dt: str):
@@ -24,13 +29,28 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
         "start_date_time": start_dt,
         "end_date_time": end_dt,
     }
-    res = requests.get(
-        "https://licor.cloud",
-        headers=headers,
-        params=params,
-        timeout=30,
-    )
-    return res.json().get("data", []) if res.status_code == 200 else []
+    try:
+        res = requests.get(
+            "https://licor.cloud",
+            headers=headers,
+            params=params,
+            timeout=30,
+        )
+
+        if res.status_code == 200:
+            # Safely attempt to parse JSON to avoid crashing on empty or HTML text strings
+            return res.json().get("data", [])
+        else:
+            print(
+                f"Device {serial} warning: Status {res.status_code} for timeframe {start_dt} to {end_dt}"
+            )
+    except requests.exceptions.JSONDecodeError:
+        print(
+            f"Device {serial} skipped: API did not return valid JSON data for timeframe {start_dt} to {end_dt}"
+        )
+    except Exception as e:
+        print(f"Network error on device {serial}: {e}")
+    return []
 
 
 def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days=1):
@@ -70,39 +90,44 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    print("Starting background data fetch...")
+    print("Starting bulletproof background data fetch...")
     end = datetime.now(EASTERN_TZ)
     start = end - timedelta(days=8)
 
     devices = fetch_devices()
+    if not devices:
+        print("No active devices found. Background script exiting early.")
+        return
+
     all_devices_data = []
     chunks = daterange_chunks(start, end, chunk_days=1)
 
     for d in devices:
-        serial = d["deviceSerialNumber"]
+        serial = d.get("deviceSerialNumber")
+        if not serial:
+            continue
+
         for chunk_start, chunk_end in chunks:
-            try:
-                data = fetch_device_data(
-                    serial,
-                    chunk_start.strftime("%Y-%m-%d %H:%M:%S"),
-                    chunk_end.strftime("%Y-%m-%d %H:%M:%S"),
-                )
-                if data:
-                    df_chunk = pd.DataFrame(data)
-                    df_chunk = keep_half_hour_marks(df_chunk)
-                    if not df_chunk.empty:
-                        all_devices_data.append(df_chunk)
-            except Exception as e:
-                print(f"Skipping failed chunk for {serial}: {e}")
+            chunk_start_str = chunk_start.strftime("%Y-%m-%d %H:%M:%S")
+            chunk_end_str = chunk_end.strftime("%Y-%m-%d %H:%M:%S")
+
+            data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
+            if not data:
+                continue
+
+            df_chunk = pd.DataFrame(data)
+            df_chunk = keep_half_hour_marks(df_chunk)
+
+            if not df_chunk.empty:
+                all_devices_data.append(df_chunk)
 
     if all_devices_data:
         df = pd.concat(all_devices_data, ignore_index=True)
-        # Force timestamps to strings so they save cleanly without timezone bugs
         df["timestamp"] = df["timestamp"].astype(str)
         df.to_csv("latest_sensor_data.csv", index=False)
-        print("Successfully updated latest_sensor_data.csv")
+        print("Successfully updated latest_sensor_data.csv without crashes.")
     else:
-        print("No new data fetched.")
+        print("No new data points retrieved during this hour.")
 
 
 if __name__ == "__main__":
