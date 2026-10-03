@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import folium
@@ -7,158 +8,30 @@ import requests
 import streamlit as st
 from streamlit_folium import st_folium
 
-# Define Eastern Time Zone (handles both EST and EDT automatically)
+
 EASTERN_TZ = ZoneInfo("America/New_York")
 
 
-TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
-
-headers = {
-    "Authorization": f"Bearer {TOKEN}"
-}
-
-if "data_window" not in st.session_state:
-    end = datetime.now(EASTERN_TZ)
-    start = end - timedelta(days=8)
-    st.session_state["data_window"] = {
-        "start": start,
-        "end": end
-    }
-
-start = st.session_state["data_window"]["start"]
-end = st.session_state["data_window"]["end"]
+# Instantly read from the pre-cached file managed by GitHub Actions
+@st.cache_data(ttl=60)  # Short caching check so it updates when file changes
+def load_all_device_data():
+    file_path = "latest_sensor_data.csv"
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        if not df.empty:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            return df
+    return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600)
-def fetch_devices():
-    response = requests.get(
-        "https://api.licor.cloud/v2/devices",
-        headers=headers,
-        timeout=30
-    )
-
-    if response.status_code != 200:
-        raise RuntimeError("Could not retrieve devices.")
-
-    return response.json().get("devices", [])
-
-
-@st.cache_data(ttl=3600)
-def fetch_device_data(serial: str, start_dt: str, end_dt: str):
-    params = {
-        "loggers": serial,
-        "start_date_time": start_dt,
-        "end_date_time": end_dt
-    }
-
-    response = requests.get(
-        "https://api.licor.cloud/v1/data",
-        headers=headers,
-        params=params,
-        timeout=30
-    )
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"Device {serial} data request failed: {response.status_code}"
-        )
-
-    return response.json().get("data", [])
-
-
-def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
-    chunks = []
-    current = start_dt
-    while current < end_dt:
-        chunk_end = min(current + timedelta(days=chunk_days), end_dt)
-        chunks.append((current, chunk_end))
-        current = chunk_end
-    return chunks
-
-
-def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
-    """
-    Keep one reading every 30 minutes, per sensor, anchored to actual clock
-    time (:00 and :30) in Eastern Time.
-    """
-    if df_chunk.empty:
-        return df_chunk
-
-    df_chunk = df_chunk.copy()
-    
-  
-    df_chunk["timestamp"] = (
-        pd.to_datetime(df_chunk["timestamp"], utc=True)
-        .dt.tz_convert(EASTERN_TZ)
-    )
-
-    picked_frames = []
-    for sensor, group in df_chunk.groupby("sensor_sn"):
-        resampled = (
-            group.sort_values("timestamp")
-            .set_index("timestamp")
-            .resample("30min")
-            .first()
-            .dropna(how="all")
-        )
-        resampled["sensor_sn"] = sensor
-        picked_frames.append(resampled.reset_index())
-
-    if not picked_frames:
-        return df_chunk.iloc[0:0]
-
-    return pd.concat(picked_frames, ignore_index=True)
-
-
-@st.cache_data(ttl=3600)
-def load_all_device_data(start_dt: datetime, end_dt: datetime):
-    devices = fetch_devices()
-    all_devices_data = []
-
-    chunks = daterange_chunks(start_dt, end_dt, chunk_days=1)
-
-    for d in devices:
-        serial = d["deviceSerialNumber"]
-
-        for chunk_start, chunk_end in chunks:
-            chunk_start_str = chunk_start.strftime("%Y-%m-%d %H:%M:%S")
-            chunk_end_str = chunk_end.strftime("%Y-%m-%d %H:%M:%S")
-
-            try:
-                data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
-            except RuntimeError as exc:
-                st.warning(str(exc))
-                continue
-
-            if not data:
-                continue
-
-            df_chunk = pd.DataFrame(data)
-            df_chunk = keep_half_hour_marks(df_chunk)
-
-            if df_chunk.empty:
-                continue
-
-            all_devices_data.append(df_chunk)
-
-    if not all_devices_data:
-        return pd.DataFrame()
-
-    df = pd.concat(all_devices_data, ignore_index=True)
-
-    return df
-
-
-try:
-    df = load_all_device_data(start, end)
-except RuntimeError as exc:
-    st.error(str(exc))
-    st.stop()
-
+df = load_all_device_data()
 
 if df.empty:
-    st.text("No data returned from any devices.")
+    st.error(
+        "Sensor data file is empty or missing. Please wait for GitHub Actions to run."
+    )
     st.stop()
+
 
 
 # Water depth sensors: name -> sensor_sn
