@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pandas requests zoneinfo
+          pip install pandas requests tzdata
 
       - name: Run Fetch Script
         run: python fetch_data.py
