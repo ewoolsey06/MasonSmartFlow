@@ -7,25 +7,30 @@ import requests
 
 EASTERN_TZ = ZoneInfo("America/New_York")
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
+
+# Enhanced headers mimicking standard platform request validations
 headers = {
     "Authorization": f"Bearer {TOKEN}",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json"
+    "Accept": "application/json",
+    "Content-Type": "application/json"
 }
 
-
 def fetch_devices():
+    # Base V2 Endpoint for managing device structures
+    url = "https://licor.cloud"
     try:
-        res = requests.get(
-            "https://licor.cloud", headers=headers, timeout=30
-        )
+        print(f"Requesting device roster from {url}...")
+        res = requests.get(url, headers=headers, timeout=30)
+        
         if res.status_code == 200:
             return res.json().get("devices", [])
+        
         print(f"Devices API warning: Status code {res.status_code}")
+        print(f"Server response snippet: {res.text[:300]}") # Diagnostics log
     except Exception as e:
         print(f"Error fetching devices list: {e}")
     return []
-
 
 def fetch_device_data(serial: str, start_dt: str, end_dt: str):
     params = {
@@ -33,29 +38,21 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
         "start_date_time": start_dt,
         "end_date_time": end_dt,
     }
+    # Correct updated subdomain endpoint layout required by LI-COR Cloud API
+    url = "https://api.hobolink.licor.cloud/v1/data"
     try:
-        res = requests.get(
-            "https://licor.cloud",
-            headers=headers,
-            params=params,
-            timeout=30,
-        )
+        res = requests.get(url, headers=headers, params=params, timeout=30)
 
         if res.status_code == 200:
-            # Safely attempt to parse JSON to avoid crashing on empty or HTML text strings
             return res.json().get("data", [])
         else:
-            print(
-                f"Device {serial} warning: Status {res.status_code} for timeframe {start_dt} to {end_dt}"
-            )
+            print(f"Device {serial} error status {res.status_code}")
+            print(f"Server content payload snippet: {res.text[:200]}")
     except requests.exceptions.JSONDecodeError:
-        print(
-            f"Device {serial} skipped: API did not return valid JSON data for timeframe {start_dt} to {end_dt}"
-        )
+        print(f"Device {serial} returned unparsable HTML text layout instead of clean JSON.")
     except Exception as e:
         print(f"Network error on device {serial}: {e}")
     return []
-
 
 def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days=1):
     chunks = []
@@ -65,7 +62,6 @@ def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days=1):
         chunks.append((current, chunk_end))
         current = chunk_end
     return chunks
-
 
 def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
     if df_chunk.empty:
@@ -92,15 +88,14 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
         else df_chunk.iloc[0:0]
     )
 
-
 def main():
-    print("Starting bulletproof background data fetch...")
+    print("Executing cloud resilient API processing pass...")
     end = datetime.now(EASTERN_TZ)
     start = end - timedelta(days=8)
 
     devices = fetch_devices()
     if not devices:
-        print("No active devices found. Background script exiting early.")
+        print("Exiting pipeline. Device listing query returned empty.")
         return
 
     all_devices_data = []
@@ -129,10 +124,9 @@ def main():
         df = pd.concat(all_devices_data, ignore_index=True)
         df["timestamp"] = df["timestamp"].astype(str)
         df.to_csv("latest_sensor_data.csv", index=False)
-        print("Successfully updated latest_sensor_data.csv without crashes.")
+        print("Success! latest_sensor_data.csv file written cleanly.")
     else:
-        print("No new data points retrieved during this hour.")
-
+        print("Processing finished: No records generated for this interval.")
 
 if __name__ == "__main__":
     main()
