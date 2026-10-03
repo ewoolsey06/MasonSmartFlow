@@ -29,15 +29,22 @@ jobs:
       - name: Run Fetch Script
         run: python fetch_data.py
 
+ # .github/workflows/hourly_fetch.yml (Bottom Step Update)
+
       - name: Commit and Push Updated Data
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "actions@github.com"
-          git add latest_sensor_data.csv
-          if git diff --staged --quiet; then
-            echo "No data changes detected. Skipping commit."
+          
+          # Only attempt to track and commit if the script successfully outputted the file
+          if [ -f "latest_sensor_data.csv" ]; then
+            git add latest_sensor_data.csv
+            if git diff --staged --quiet; then
+              echo "No data changes detected in the file. Skipping commit."
+            else
+              git commit -m "Automated hourly sensor data refresh"
+              git push
+            fi
           else
-            git commit -m "Automated hourly sensor data refresh"
-            git push
+            echo "Warning: latest_sensor_data.csv was not generated. The API might be empty right now."
           fi
-
