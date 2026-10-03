@@ -8,7 +8,6 @@ import requests
 EASTERN_TZ = ZoneInfo("America/New_York")
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 
-# Enhanced headers mimicking standard platform request validations
 headers = {
     "Authorization": f"Bearer {TOKEN}",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -17,17 +16,20 @@ headers = {
 }
 
 def fetch_devices():
-    # Base V2 Endpoint for managing device structures
+    # Crucial: Ensure 'api.' is at the front of the domain name string!
     url = "https://licor.cloud"
     try:
         print(f"Requesting device roster from {url}...")
         res = requests.get(url, headers=headers, timeout=30)
         
+        # Explicit status check so we don't try to parse bad payloads
         if res.status_code == 200:
             return res.json().get("devices", [])
         
         print(f"Devices API warning: Status code {res.status_code}")
-        print(f"Server response snippet: {res.text[:300]}") # Diagnostics log
+        print(f"Server response payload snippet: {res.text[:300]}")
+    except requests.exceptions.JSONDecodeError:
+        print("API Error: Endpoint didn't return JSON. Check if domain or token is valid.")
     except Exception as e:
         print(f"Error fetching devices list: {e}")
     return []
@@ -38,8 +40,7 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
         "start_date_time": start_dt,
         "end_date_time": end_dt,
     }
-    # Correct updated subdomain endpoint layout required by LI-COR Cloud API
-    url = "https://api.hobolink.licor.cloud/v1/data"
+    url = "https://licor.cloud"
     try:
         res = requests.get(url, headers=headers, params=params, timeout=30)
 
@@ -49,7 +50,7 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
             print(f"Device {serial} error status {res.status_code}")
             print(f"Server content payload snippet: {res.text[:200]}")
     except requests.exceptions.JSONDecodeError:
-        print(f"Device {serial} returned unparsable HTML text layout instead of clean JSON.")
+        print(f"Device {serial} returned unparsable layout data instead of JSON.")
     except Exception as e:
         print(f"Network error on device {serial}: {e}")
     return []
@@ -130,3 +131,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
