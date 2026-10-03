@@ -12,7 +12,6 @@ headers = {"Authorization": f"Bearer {TOKEN}"}
 
 
 def fetch_devices():
-    # Enforcing the secure API server subdomain destination string layout
     response = requests.get(
         "https://licor.cloud", headers=headers, timeout=30
     )
@@ -31,7 +30,7 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
         "https://licor.cloud",
         headers=headers,
         params=params,
-        timeout=30,
+        timeout=30
     )
     if response.status_code != 200:
         raise RuntimeError(
@@ -54,23 +53,18 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
     if df_chunk.empty:
         return df_chunk
 
-    # Defend against column indexing omissions from empty logging units
     if "timestamp" not in df_chunk.columns or "sensor_sn" not in df_chunk.columns:
         print("Data parsing warning: Required columns missing from payload chunk.")
         return df_chunk.iloc[0:0]
 
     df_chunk = df_chunk.copy()
     
-    # Explicit conversion ensuring pandas treats values as datetime properties
     df_chunk["timestamp"] = pd.to_datetime(df_chunk["timestamp"], utc=True)
     df_chunk["timestamp"] = df_chunk["timestamp"].dt.tz_convert(EASTERN_TZ)
 
     picked_frames = []
     for sensor, group in df_chunk.groupby("sensor_sn"):
-        # Sort and lock index prior to running the resampling calculations
         sorted_group = group.sort_values("timestamp").set_index("timestamp")
-        
-        # Enforce exact rule processing constraints safely
         resampled = (
             sorted_group.resample("30min")
             .first()
@@ -105,10 +99,11 @@ def main():
         if not serial:
             continue
 
-        print(f"Querying sensor data matrix patterns for hardware signature: {serial}")
+        print(f"Querying sensor data patterns for hardware signature: {serial}")
         for chunk_start, chunk_end in chunks:
-            chunk_start_str = chunk_start.strftime("%Y-%m-%d %H:%M:%S")
-            chunk_end_str = chunk_end.strftime("%Y-%m-%d %H:%M:%S")
+            # Enforce strict ISO-8601 formatting format containing the clear 'T' delimiter rule
+            chunk_start_str = chunk_start.strftime("%Y-%m-%dT%H:%M:%S")
+            chunk_end_str = chunk_end.strftime("%Y-%m-%dT%H:%M:%S")
 
             try:
                 data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
@@ -128,10 +123,7 @@ def main():
         print("Completed tracking evaluation: Zero data payloads recorded.")
         return
 
-    # Consolidating matrix entries and rendering data cache asset
     df = pd.concat(all_devices_data, ignore_index=True)
-    
-    # Cast all timestamp index frames to string formatting to eliminate save conflicts
     df["timestamp"] = df["timestamp"].astype(str)
     
     df.to_csv("latest_sensor_data.csv", index=False)
@@ -139,13 +131,11 @@ def main():
 
 
 if __name__ == "__main__":
-    # Top-level global exception wrapper to expose exact script logic blocks failures
     try:
         main()
     except Exception as global_error:
         print(f"Fatal transformation processing error: {global_error}")
         import traceback
         traceback.print_exc()
-        # Explicit non-zero error to control action state transitions safely
         exit(1)
 
