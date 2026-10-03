@@ -3,8 +3,12 @@ name: Hourly Sensor Data Refresh
 
 on:
   schedule:
-    - cron: '0 * * * *'  # Runs exactly at the top of every hour
-  workflow_dispatch:     # Allows you to click a button in GitHub to run it manually
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+# Add this block to allow the bot to commit changes
+permissions:
+  contents: write
 
 jobs:
   refresh-data:
@@ -16,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-python-version: '3.10'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
@@ -36,3 +40,4 @@ jobs:
             git commit -m "Automated hourly sensor data refresh"
             git push
           fi
+
