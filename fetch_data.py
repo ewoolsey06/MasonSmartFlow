@@ -1,61 +1,49 @@
 # fetch_data.py
+import json
 import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
+# 1. Exact configurations from your original app
 EASTERN_TZ = ZoneInfo("America/New_York")
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
+headers = {"Authorization": f"Bearer {TOKEN}"}
 
-headers = {
-    "Authorization": f"Bearer {TOKEN}",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Content-Type": "application/json"
-}
 
+# 2. Your exact original fetch_devices logic (minus st elements)
 def fetch_devices():
-    # Crucial: Ensure 'api.' is at the front of the domain name string!
-    url = "https://licor.cloud"
-    try:
-        print(f"Requesting device roster from {url}...")
-        res = requests.get(url, headers=headers, timeout=30)
-        
-        # Explicit status check so we don't try to parse bad payloads
-        if res.status_code == 200:
-            return res.json().get("devices", [])
-        
-        print(f"Devices API warning: Status code {res.status_code}")
-        print(f"Server response payload snippet: {res.text[:300]}")
-    except requests.exceptions.JSONDecodeError:
-        print("API Error: Endpoint didn't return JSON. Check if domain or token is valid.")
-    except Exception as e:
-        print(f"Error fetching devices list: {e}")
-    return []
+    response = requests.get(
+        "https://licor.cloud", headers=headers, timeout=30
+    )
+    if response.status_code != 200:
+        raise RuntimeError("Could not retrieve devices.")
+    return response.json().get("devices", [])
 
+
+# 3. Your exact original fetch_device_data logic
 def fetch_device_data(serial: str, start_dt: str, end_dt: str):
     params = {
         "loggers": serial,
         "start_date_time": start_dt,
         "end_date_time": end_dt,
     }
-    url = "https://licor.cloud"
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=30)
+    response = requests.get(
+        "https://licor.cloud",
+        headers=headers,
+        params=params,
+        timeout=30,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"Device {serial} data request failed: {response.status_code}"
+        )
+    return response.json().get("data", [])
 
-        if res.status_code == 200:
-            return res.json().get("data", [])
-        else:
-            print(f"Device {serial} error status {res.status_code}")
-            print(f"Server content payload snippet: {res.text[:200]}")
-    except requests.exceptions.JSONDecodeError:
-        print(f"Device {serial} returned unparsable layout data instead of JSON.")
-    except Exception as e:
-        print(f"Network error on device {serial}: {e}")
-    return []
 
-def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days=1):
+# 4. Your exact original daterange_chunks utility
+def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
     chunks = []
     current = start_dt
     while current < end_dt:
@@ -64,14 +52,16 @@ def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days=1):
         current = chunk_end
     return chunks
 
+
+# 5. Your exact original keep_half_hour_marks calculations
 def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
     if df_chunk.empty:
         return df_chunk
     df_chunk = df_chunk.copy()
-    df_chunk["timestamp"] = (
-        pd.to_datetime(df_chunk["timestamp"], utc=True)
-        .dt.tz_convert(EASTERN_TZ)
-    )
+    df_chunk["timestamp"] = pd.to_datetime(
+        df_chunk["timestamp"], utc=True
+    ).dt.tz_convert(EASTERN_TZ)
+
     picked_frames = []
     for sensor, group in df_chunk.groupby("sensor_sn"):
         resampled = (
@@ -83,51 +73,65 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
         )
         resampled["sensor_sn"] = sensor
         picked_frames.append(resampled.reset_index())
-    return (
-        pd.concat(picked_frames, ignore_index=True)
-        if picked_frames
-        else df_chunk.iloc[0:0]
-    )
 
+    if not picked_frames:
+        return df_chunk.iloc[0:0]
+    return pd.concat(picked_frames, ignore_index=True)
+
+
+# 6. Main execution engine matching your original app startup steps
 def main():
-    print("Executing cloud resilient API processing pass...")
+    print("Starting data pre-fetch pipeline...")
+
+    # Mirroring your 8-day original data window anchor
     end = datetime.now(EASTERN_TZ)
     start = end - timedelta(days=8)
 
-    devices = fetch_devices()
-    if not devices:
-        print("Exiting pipeline. Device listing query returned empty.")
+    try:
+        devices = fetch_devices()
+    except RuntimeError as exc:
+        print(f"Initialization Failed: {exc}")
         return
 
     all_devices_data = []
     chunks = daterange_chunks(start, end, chunk_days=1)
 
     for d in devices:
-        serial = d.get("deviceSerialNumber")
-        if not serial:
-            continue
-
+        serial = d["deviceSerialNumber"]
         for chunk_start, chunk_end in chunks:
             chunk_start_str = chunk_start.strftime("%Y-%m-%d %H:%M:%S")
             chunk_end_str = chunk_end.strftime("%Y-%m-%d %H:%M:%S")
 
-            data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
+            try:
+                data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
+            except RuntimeError as exc:
+                # Replaced st.warning with a python background log print statement
+                print(f"Warning skipped: {exc}")
+                continue
+
             if not data:
                 continue
 
             df_chunk = pd.DataFrame(data)
             df_chunk = keep_half_hour_marks(df_chunk)
 
-            if not df_chunk.empty:
-                all_devices_data.append(df_chunk)
+            if df_chunk.empty:
+                continue
 
-    if all_devices_data:
-        df = pd.concat(all_devices_data, ignore_index=True)
-        df["timestamp"] = df["timestamp"].astype(str)
-        df.to_csv("latest_sensor_data.csv", index=False)
-        print("Success! latest_sensor_data.csv file written cleanly.")
-    else:
-        print("Processing finished: No records generated for this interval.")
+            all_devices_data.append(df_chunk)
+
+    if not all_devices_data:
+        print("No data returned from any devices during this window loop.")
+        return
+
+    # Merge everything and save locally to disk
+    df = pd.concat(all_devices_data, ignore_index=True)
+
+    # Convert timestamps back to clean string formatting to preserve file compatibility
+    df["timestamp"] = df["timestamp"].astype(str)
+    df.to_csv("latest_sensor_data.csv", index=False)
+    print("Successfully built and updated latest_sensor_data.csv!")
+
 
 if __name__ == "__main__":
     main()
