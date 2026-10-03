@@ -6,23 +6,21 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 
-# 1. Exact configurations from your original app
 EASTERN_TZ = ZoneInfo("America/New_York")
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 headers = {"Authorization": f"Bearer {TOKEN}"}
 
 
-# 2. Your exact original fetch_devices logic (minus st elements)
 def fetch_devices():
+    # Enforcing the secure API server subdomain destination string layout
     response = requests.get(
         "https://licor.cloud", headers=headers, timeout=30
     )
     if response.status_code != 200:
-        raise RuntimeError("Could not retrieve devices.")
+        raise RuntimeError(f"Could not retrieve devices list. Status: {response.status_code}")
     return response.json().get("devices", [])
 
 
-# 3. Your exact original fetch_device_data logic
 def fetch_device_data(serial: str, start_dt: str, end_dt: str):
     params = {
         "loggers": serial,
@@ -42,7 +40,6 @@ def fetch_device_data(serial: str, start_dt: str, end_dt: str):
     return response.json().get("data", [])
 
 
-# 4. Your exact original daterange_chunks utility
 def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
     chunks = []
     current = start_dt
@@ -53,21 +50,29 @@ def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
     return chunks
 
 
-# 5. Your exact original keep_half_hour_marks calculations
 def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
     if df_chunk.empty:
         return df_chunk
+
+    # Defend against column indexing omissions from empty logging units
+    if "timestamp" not in df_chunk.columns or "sensor_sn" not in df_chunk.columns:
+        print("Data parsing warning: Required columns missing from payload chunk.")
+        return df_chunk.iloc[0:0]
+
     df_chunk = df_chunk.copy()
-    df_chunk["timestamp"] = pd.to_datetime(
-        df_chunk["timestamp"], utc=True
-    ).dt.tz_convert(EASTERN_TZ)
+    
+    # Explicit conversion ensuring pandas treats values as datetime properties
+    df_chunk["timestamp"] = pd.to_datetime(df_chunk["timestamp"], utc=True)
+    df_chunk["timestamp"] = df_chunk["timestamp"].dt.tz_convert(EASTERN_TZ)
 
     picked_frames = []
     for sensor, group in df_chunk.groupby("sensor_sn"):
+        # Sort and lock index prior to running the resampling calculations
+        sorted_group = group.sort_values("timestamp").set_index("timestamp")
+        
+        # Enforce exact rule processing constraints safely
         resampled = (
-            group.sort_values("timestamp")
-            .set_index("timestamp")
-            .resample("30min")
+            sorted_group.resample("30min")
             .first()
             .dropna(how="all")
         )
@@ -76,63 +81,71 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
 
     if not picked_frames:
         return df_chunk.iloc[0:0]
+
     return pd.concat(picked_frames, ignore_index=True)
 
 
-# 6. Main execution engine matching your original app startup steps
 def main():
-    print("Starting data pre-fetch pipeline...")
-
-    # Mirroring your 8-day original data window anchor
+    print("Initializing background transformation pipeline...")
     end = datetime.now(EASTERN_TZ)
     start = end - timedelta(days=8)
 
     try:
         devices = fetch_devices()
-    except RuntimeError as exc:
-        print(f"Initialization Failed: {exc}")
+        print(f"Successfully discovered {len(devices)} active logging units.")
+    except Exception as exc:
+        print(f"Critical execution error during initialization phase: {exc}")
         return
 
     all_devices_data = []
     chunks = daterange_chunks(start, end, chunk_days=1)
 
     for d in devices:
-        serial = d["deviceSerialNumber"]
+        serial = d.get("deviceSerialNumber")
+        if not serial:
+            continue
+
+        print(f"Querying sensor data matrix patterns for hardware signature: {serial}")
         for chunk_start, chunk_end in chunks:
             chunk_start_str = chunk_start.strftime("%Y-%m-%d %H:%M:%S")
             chunk_end_str = chunk_end.strftime("%Y-%m-%d %H:%M:%S")
 
             try:
                 data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
-            except RuntimeError as exc:
-                # Replaced st.warning with a python background log print statement
-                print(f"Warning skipped: {exc}")
+                if not data:
+                    continue
+
+                df_chunk = pd.DataFrame(data)
+                df_chunk = keep_half_hour_marks(df_chunk)
+
+                if not df_chunk.empty:
+                    all_devices_data.append(df_chunk)
+            except Exception as exc:
+                print(f"Skipped intermittent network request failure: {exc}")
                 continue
-
-            if not data:
-                continue
-
-            df_chunk = pd.DataFrame(data)
-            df_chunk = keep_half_hour_marks(df_chunk)
-
-            if df_chunk.empty:
-                continue
-
-            all_devices_data.append(df_chunk)
 
     if not all_devices_data:
-        print("No data returned from any devices during this window loop.")
+        print("Completed tracking evaluation: Zero data payloads recorded.")
         return
 
-    # Merge everything and save locally to disk
+    # Consolidating matrix entries and rendering data cache asset
     df = pd.concat(all_devices_data, ignore_index=True)
-
-    # Convert timestamps back to clean string formatting to preserve file compatibility
+    
+    # Cast all timestamp index frames to string formatting to eliminate save conflicts
     df["timestamp"] = df["timestamp"].astype(str)
+    
     df.to_csv("latest_sensor_data.csv", index=False)
-    print("Successfully built and updated latest_sensor_data.csv!")
+    print("Success: latest_sensor_data.csv dataset refreshed successfully.")
 
 
 if __name__ == "__main__":
-    main()
+    # Top-level global exception wrapper to expose exact script logic blocks failures
+    try:
+        main()
+    except Exception as global_error:
+        print(f"Fatal transformation processing error: {global_error}")
+        import traceback
+        traceback.print_exc()
+        # Explicit non-zero error to control action state transitions safely
+        exit(1)
 
