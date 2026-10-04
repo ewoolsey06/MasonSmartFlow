@@ -1,3 +1,5 @@
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import folium
@@ -13,12 +15,29 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 
 TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 
+
+# Water depth sensors: name -> sensor_sn
+SENSOR_CONFIG = {
+    "Green Bridge": "22406680-1",
+    "Mason Pond": "22406678-1",
+    "The Hub": "22508090-1",
+    "RAC Sensor": "22308166-1",
+    "Lot C #1": "22308168-1",
+    "Lot C #2": "22406679-1",
+    "Aquatic Center": "22406677-1",
+}
+
+RAIN_SENSORS = ["22334782-1", "22334782-2"]
+NEEDED_SERIALS = {sn.rsplit("-", 1)[0] for sn in [*SENSOR_CONFIG.values(), *RAIN_SENSORS]}
+
 headers = {
     "Authorization": f"Bearer {TOKEN}"
 }
 
 if "data_window" not in st.session_state:
-    end = datetime.now(EASTERN_TZ)
+    # Round "now" down to the half hour so every session shares the same cache key
+    now = datetime.now(EASTERN_TZ)
+    end = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
     start = end - timedelta(days=8)
     st.session_state["data_window"] = {
         "start": start,
@@ -43,20 +62,24 @@ def fetch_devices():
     return response.json().get("devices", [])
 
 
-@st.cache_data(ttl=3600)
-def fetch_device_data(serial: str, start_dt: str, end_dt: str):
+MAX_WORKERS = 4  # parallel requests; lower this if the API starts returning 429s
+API_DATA_URL = "https://api.licor.cloud/v1/data"
+
+
+def fetch_device_data(session: requests.Session, serial: str, start_dt: str, end_dt: str):
+    """Plain function (no st.* calls, no st.cache) so it is safe to run in worker threads."""
     params = {
         "loggers": serial,
         "start_date_time": start_dt,
         "end_date_time": end_dt
     }
 
-    response = requests.get(
-        "https://api.licor.cloud/v1/data",
-        headers=headers,
-        params=params,
-        timeout=30
-    )
+    for attempt in range(3):
+        response = session.get(API_DATA_URL, headers=headers, params=params, timeout=30)
+        if response.status_code == 429:  # rate limited: back off and retry
+            time.sleep(2 ** attempt)
+            continue
+        break
 
     if response.status_code != 200:
         raise RuntimeError(
@@ -113,40 +136,47 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
 @st.cache_data(ttl=3600)
 def load_all_device_data(start_dt: datetime, end_dt: datetime):
     devices = fetch_devices()
-    all_devices_data = []
+
+    # Only fetch devices we actually use (sensor_sn looks like "<device serial>-<n>").
+    # Falls back to all devices if the serial format doesn't match.
+    wanted = [d for d in devices if d["deviceSerialNumber"] in NEEDED_SERIALS]
+    devices = wanted or devices
 
     chunks = daterange_chunks(start_dt, end_dt, chunk_days=1)
+    tasks = [
+        (
+            d["deviceSerialNumber"],
+            cs.strftime("%Y-%m-%d %H:%M:%S"),
+            ce.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        for d in devices
+        for cs, ce in chunks
+    ]
 
-    for d in devices:
-        serial = d["deviceSerialNumber"]
+    session = requests.Session()  # reuses connections across requests
 
-        for chunk_start, chunk_end in chunks:
-            chunk_start_str = chunk_start.strftime("%Y-%m-%d %H:%M:%S")
-            chunk_end_str = chunk_end.strftime("%Y-%m-%d %H:%M:%S")
+    def work(task):
+        try:
+            return fetch_device_data(session, *task), None
+        except (RuntimeError, requests.RequestException) as exc:
+            return [], str(exc)
 
-            try:
-                data = fetch_device_data(serial, chunk_start_str, chunk_end_str)
-            except RuntimeError as exc:
-                st.warning(str(exc))
-                continue
+    # Same 1-day chunks as before, just a few in flight at a time
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        results = list(pool.map(work, tasks))
 
-            if not data:
-                continue
+    frames = []
+    for data, err in results:
+        if err:
+            st.warning(err)
+        elif data:
+            frames.append(pd.DataFrame(data))
 
-            df_chunk = pd.DataFrame(data)
-            df_chunk = keep_half_hour_marks(df_chunk)
-
-            if df_chunk.empty:
-                continue
-
-            all_devices_data.append(df_chunk)
-
-    if not all_devices_data:
+    if not frames:
         return pd.DataFrame()
 
-    df = pd.concat(all_devices_data, ignore_index=True)
-
-    return df
+    # Downsample once on the full dataset instead of once per chunk
+    return keep_half_hour_marks(pd.concat(frames, ignore_index=True))
 
 
 try:
@@ -159,18 +189,6 @@ except RuntimeError as exc:
 if df.empty:
     st.text("No data returned from any devices.")
     st.stop()
-
-
-# Water depth sensors: name -> sensor_sn
-SENSOR_CONFIG = {
-    "Green Bridge": "22406680-1",
-    "Mason Pond": "22406678-1",
-    "The Hub": "22508090-1",
-    "RAC Sensor": "22308166-1",
-    "Lot C #1": "22308168-1",
-    "Lot C #2": "22406679-1",
-    "Aquatic Center": "22406677-1",
-}
 
 RANGE_OPTIONS = {
     "1 Week": timedelta(days=7),
