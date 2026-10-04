@@ -316,21 +316,46 @@ def set_graph_range(range_label: str):
 
 
 left_col, right_col = st.columns([1, 3])
+
 with left_col:
-if not matches.empty:
-st.session_state["selected_location"] = matches.iloc[0]["name"]
-selected_location = st.session_state.get("selected_location")
+    # 1. Update session state if a map selection match is found
+    if not matches.empty:
+        st.session_state["selected_location"] = matches.iloc[0]["name"]
+    
+    # 2. Safely read out the selected location variable
+    selected_location = st.session_state.get("selected_location")
+    if selected_location:
+        selection_placeholder.write(f"**Selected:** {selected_location}")
+
+# 3. Render the interactive graphing section conditionally based on selection state
 if selected_location:
-selection_placeholder.write(f"Selected: {selected_location}")
-st.subheader(f"{selected_location} Water Depth")
-r_col1, r_col2, r_col3, r_col4 = st.columns([1, 1, 1, 3])
-with r_col1: st.button("1 Week", key="r_1w", on_click=set_graph_range, args=("1 Week",))
-with r_col2: st.button("3 Days", key="r_3d", on_click=set_graph_range, args=("3 Days",))
-with r_col3: st.button("24 Hours", key="r_24h", on_click=set_graph_range, args=("24 Hours",))
-with r_col4: st.caption(f"Showing: {st.session_state['graph_range']}")
-fig = build_sensor_figure(sensor_data[selected_location], selected_location, sensor_y_range[selected_location], st.session_state["graph_range"])
-st.plotly_chart(fig, use_container_width=True)
+    st.subheader(f"{selected_location} Water Depth")
+    
+    # Set proportional column structures for the date range toggle buttons
+    r_col1, r_col2, r_col3, r_col4 = st.columns([1, 1, 1, 3])
+    with r_col1: 
+        st.button("1 Week", key="r_1w", on_click=set_graph_range, args=("1 Week",))
+    with r_col2: 
+        st.button("3 Days", key="r_3d", on_click=set_graph_range, args=("3 Days",))
+    with r_col3: 
+        st.button("24 Hours", key="r_24h", on_click=set_graph_range, args=("24 Hours",))
+    with r_col4: 
+        st.caption(f"Showing: {st.session_state['graph_range']}")
+
+    # Render the targeted depth visualization profile
+    fig = build_sensor_figure(
+        sensor_data[selected_location], 
+        selected_location, 
+        sensor_y_range[selected_location], 
+        st.session_state["graph_range"]
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# 4. Display general rain telemetry dashboards globally below the map components
 st.subheader("Rainfall / Device Analytics")
 tab1, tab2 = st.tabs(["Total Rain", "Accumulated Rain"])
-with tab1: st.plotly_chart(rt_fig, use_container_width=True)
-with tab2: st.plotly_chart(ra_fig, use_container_width=True)
+with tab1: 
+    st.plotly_chart(rt_fig, use_container_width=True)
+with tab2: 
+    st.plotly_chart(ra_fig, use_container_width=True)
+
