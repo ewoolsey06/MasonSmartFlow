@@ -429,10 +429,20 @@ for _, row in locations_df.iterrows():
         tooltip=f"Click to view {row['name']}",
         color="#01090F",
         fill=True,
-        fill_color="#318ece",
+        fill_color="#23631B",
         fill_opacity=0.7
     ).add_to(m)
 
+    folium.CircleMarker(
+        location= ['38.825153','-77.303136'],
+        radius=8,
+        popup="Rainfall Sensor",
+        tooltip=f"Scroll down to view campus rainfall data.",
+        color="#01090F",
+        fill=True,
+        fill_color="#318ece",
+        fill_opacity=0.7
+    ).add_to(m)
 
 # Session state defaults
 if "selected_location" not in st.session_state:
