@@ -7,15 +7,27 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from streamlit_folium import st_folium
 import streamlit.components.v1 as components
+from streamlit_folium import st_folium
 
 # Define Eastern Time Zone (handles both EST and EDT automatically)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  MAX WINDOW LIMIT  <-- CHANGE THIS TO 30 LATER                   ║
+# ║  Max days of data a user can request per sensor. This also       ║
+# ║  controls how much history is fetched from the LI-COR API.       ║
+# ╚══════════════════════════════════════════════════════════════════╝
+MAX_WINDOW_DAYS = 7
 
-TOKEN = "DV4iI3rviAxrn48ygbyqsYTIVx7NGTzan0bOewbnM47Y8B42"
 
+#try:
+    #TOKEN = st.secrets["TOKEN"]
+#except (KeyError, FileNotFoundError):
+    #st.error("Missing TOKEN. Add it to .streamlit/secrets.toml or your Streamlit Cloud secrets.")
+    #st.stop()
+
+TOKEN="5tqw7ssFj2v3jUer2jp3AMENZp1FqIkwUJ0AHhC7ps9ep6gh"
 
 # Water depth sensors: name -> sensor_sn
 SENSOR_CONFIG = {
@@ -39,7 +51,9 @@ if "data_window" not in st.session_state:
     # Round "now" down to the half hour so every session shares the same cache key
     now = datetime.now(EASTERN_TZ)
     end = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
-    start = end - timedelta(days=8)
+    # ╔═══ MAX WINDOW LIMIT (fetch side) ═══╗
+    start = end - timedelta(days=MAX_WINDOW_DAYS + 1)  # +1 day of buffer (was hardcoded 8)
+    # ╚═════════════════════════════════════╝
     st.session_state["data_window"] = {
         "start": start,
         "end": end
@@ -109,8 +123,7 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
         return df_chunk
 
     df_chunk = df_chunk.copy()
-    
-  
+
     df_chunk["timestamp"] = (
         pd.to_datetime(df_chunk["timestamp"], utc=True)
         .dt.tz_convert(EASTERN_TZ)
@@ -216,18 +229,43 @@ def compute_y_range(values: pd.Series, pad_frac: float = 0.05):
 
 
 def filter_by_range(sensor_df: pd.DataFrame, range_label: str) -> pd.DataFrame:
-    """Slice a sensor's full-range data down to the selected window, anchored
-    to that sensor's own most recent reading."""
+    """Slice a sensor's full-range data down to the selected window.
+    Presets are anchored to the sensor's own most recent reading;
+    "Custom" uses the absolute Eastern-time window the user chose."""
     if sensor_df.empty:
         return sensor_df
+
+    if range_label == "Custom":
+        custom = st.session_state.get("custom_range")
+        if custom:
+            c_start, c_end = custom
+            return sensor_df[(sensor_df.index >= c_start) & (sensor_df.index <= c_end)]
+        range_label = DEFAULT_RANGE  # fallback if nothing was set
 
     latest = sensor_df.index.max()
     cutoff = latest - RANGE_OPTIONS.get(range_label, RANGE_OPTIONS[DEFAULT_RANGE])
     return sensor_df[sensor_df.index >= cutoff]
 
 
+def describe_range(range_label: str) -> str:
+    """Human-readable label for titles and buttons."""
+    if range_label == "Custom" and st.session_state.get("custom_range"):
+        c_start, c_end = st.session_state["custom_range"]
+        return f"{c_start:%b %d %H:%M} – {c_end:%b %d %H:%M}"
+    return range_label
+
+
+def range_file_suffix(range_label: str) -> str:
+    """Filename-safe label for the downloaded CSV."""
+    if range_label == "Custom" and st.session_state.get("custom_range"):
+        c_start, c_end = st.session_state["custom_range"]
+        return f"{c_start:%Y%m%d_%H%M}_to_{c_end:%Y%m%d_%H%M}"
+    return range_label.lower().replace(" ", "_")
+
+
 def build_sensor_figure(sensor_df: pd.DataFrame, name: str, y_range, range_label: str) -> go.Figure:
     filtered = filter_by_range(sensor_df, range_label)
+    display_label = describe_range(range_label)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -238,8 +276,8 @@ def build_sensor_figure(sensor_df: pd.DataFrame, name: str, y_range, range_label
         line=dict(color='#005138', width=0.75)
     ))
     fig.update_layout(
-        title=f"{name} Data ({range_label}) - Eastern Time",
-        xaxis_title=f"Time ({range_label} EST/EDT)",
+        title=f"{name} Data ({display_label}) - Eastern Time",
+        xaxis_title=f"Time ({display_label} EST/EDT)",
         yaxis_title="Water Depth (ft)",
         hovermode='x unified',
         width=1000,
@@ -370,8 +408,6 @@ st.markdown(
 )
 
 
-
-
 st.subheader("Fairfax Campus Sensor Location Map")
 st.write("Click on any marker on the map or use the buttons to view the sensor's name and to display its specific water depth data")
 
@@ -398,27 +434,54 @@ for _, row in locations_df.iterrows():
     ).add_to(m)
 
 
-# Render buttons next to the map using columns
+# Session state defaults
 if "selected_location" not in st.session_state:
     st.session_state["selected_location"] = None
 if "button_clicked" not in st.session_state:
     st.session_state["button_clicked"] = False
 if "graph_range" not in st.session_state:
     st.session_state["graph_range"] = DEFAULT_RANGE
+if "custom_range" not in st.session_state:
+    st.session_state["custom_range"] = None
+if "custom_error" not in st.session_state:
+    st.session_state["custom_error"] = None
 
 
 def set_selected(location: str):
     st.session_state["selected_location"] = location
     st.session_state["graph_range"] = DEFAULT_RANGE  # reset to 3 Days whenever a new sensor is picked
+    st.session_state["custom_range"] = None
+    st.session_state["custom_error"] = None
     st.session_state["button_clicked"] = True
-    st.session_state["scroll_to_plot"] = True
+    st.session_state["scroll_to_plot"] = True  # trigger auto-scroll to the plot
 
 
 def set_graph_range(range_label: str):
     st.session_state["graph_range"] = range_label
+    st.session_state["custom_error"] = None
     st.session_state["button_clicked"] = True  # don't let the map click re-processing override this
 
 
+def apply_custom_range(key: str):
+    s = st.session_state
+    s["button_clicked"] = True  # don't let the map click re-processing override this
+
+    start_dt = datetime.combine(s[f"{key}_sd"], s[f"{key}_st"], tzinfo=EASTERN_TZ)
+    end_dt = datetime.combine(s[f"{key}_ed"], s[f"{key}_et"], tzinfo=EASTERN_TZ)
+
+    if end_dt <= start_dt:
+        s["custom_error"] = "End time must be after start time."
+    # ╔═══════════ MAX WINDOW LIMIT (validation side) ═══════════╗
+    elif end_dt - start_dt > timedelta(days=MAX_WINDOW_DAYS):
+        s["custom_error"] = f"Please request a timeframe within the {MAX_WINDOW_DAYS} days or less."
+    # ╚══════════════════════════════════════════════════════════╝
+    else:
+        s["custom_error"] = None
+        s["custom_range"] = (start_dt, end_dt)
+        s["graph_range"] = "Custom"
+
+
+# Render buttons next to the map using columns
 left_col, right_col = st.columns([1, 3])
 
 with left_col:
@@ -456,7 +519,9 @@ else:
             clicked_name = matches.iloc[0]["name"]
             if clicked_name != st.session_state.get("selected_location"):
                 st.session_state["graph_range"] = DEFAULT_RANGE
-                st.session_state["scroll_to_plot"] = True
+                st.session_state["custom_range"] = None
+                st.session_state["custom_error"] = None
+                st.session_state["scroll_to_plot"] = True  # trigger auto-scroll to the plot
             st.session_state["selected_location"] = clicked_name
 
 
@@ -494,8 +559,6 @@ if selected_location is not None:
             height=0,
         )
 
-    # ... rest of your existing code (CSS, range buttons, chart, downloads)
-
     # Custom CSS to shrink buttons and tighten vertical margins
     st.markdown(
         """
@@ -510,15 +573,28 @@ if selected_location is not None:
             margin-top: -10px !important;
             margin-bottom: -10px !important;
         }
-        
+
         /* Adjust alignment for the caption label */
         div[data-testid="column"] div[data-testid="stCaptionContainer"] {
             margin-top: -6px !important;
         }
+
+        /* Keep download button text on one line */
+        div[data-testid="stDownloadButton"] button {
+         white-space: nowrap !important;
+         width: auto !important;
+         min-width: 100% !important;
+    }
+    div[data-testid="stDownloadButton"] button p {
+        white-space: nowrap !important;
+    }   
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+    curr_df = sensor_data[selected_location]
+    key = "cw_" + selected_location.lower().replace(" ", "_").replace("#", "")
 
     range_col1, range_col2, range_col3, range_col4 = st.columns([1, 1, 1, 3])
     with range_col1:
@@ -528,67 +604,77 @@ if selected_location is not None:
     with range_col3:
         st.button("24 Hours", key="range_24h", on_click=set_graph_range, args=("24 Hours",))
     with range_col4:
-        st.caption(f"Showing: {st.session_state['graph_range']}")
+        st.caption(f"Showing: {describe_range(st.session_state['graph_range'])}")
+
+    # --- Custom time window ---
+    with st.expander(
+        "Custom time window (Eastern Time)",
+        expanded=(st.session_state["graph_range"] == "Custom"),
+    ):
+        if curr_df.empty:
+            st.info("No data available for this sensor.")
+        else:
+            earliest, latest = curr_df.index.min(), curr_df.index.max()
+            def_start = max(latest - timedelta(days=3), earliest)
+
+            with st.form(f"{key}_form"):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.date_input("Start date", value=def_start.date(),
+                              min_value=earliest.date(), max_value=latest.date(), key=f"{key}_sd")
+                c2.time_input("Start time", value=def_start.time(),
+                              step=timedelta(minutes=30), key=f"{key}_st")
+                c3.date_input("End date", value=latest.date(),
+                              min_value=earliest.date(), max_value=latest.date(), key=f"{key}_ed")
+                c4.time_input("End time", value=latest.time(),
+                              step=timedelta(minutes=30), key=f"{key}_et")
+
+                st.caption(f"Maximum window: Past {MAX_WINDOW_DAYS} days")
+                st.form_submit_button("Apply custom window",
+                                      on_click=apply_custom_range, args=(key,))
+
+            if st.session_state.get("custom_error"):
+                st.error(st.session_state["custom_error"])
 
     sensor_fig = build_sensor_figure(
-        sensor_data[selected_location],
+        curr_df,
         selected_location,
         sensor_y_range[selected_location],
         st.session_state["graph_range"]
     )
 
+    selected_df = filter_by_range(curr_df, st.session_state["graph_range"])
+    if selected_df.empty:
+        st.warning("No readings in the selected window.")
+
     st.plotly_chart(sensor_fig, width='stretch')
 
-    # --- CSV Download Section ---
+    # --- CSV Download Section (single button, matches the selected time frame) ---
     st.markdown("<p style='margin-top: 10px; font-weight: 600;'>Download Data</p>", unsafe_allow_html=True)
-    
-    # Get current sensor DataFrame
-    curr_df = sensor_data[selected_location]
-    
-    # Pre-filter datasets for all 3 time ranges
-    df_1w = filter_by_range(curr_df, "1 Week").reset_index()
-    df_3d = filter_by_range(curr_df, "3 Days").reset_index()
-    df_24h = filter_by_range(curr_df, "24 Hours").reset_index()
+
+    current_range = st.session_state["graph_range"]
+    download_df = selected_df.reset_index()
 
     # Format timestamp column for clean CSV output
-    for d in (df_1w, df_3d, df_24h):
-        if not d.empty and "timestamp" in d.columns:
-            d["timestamp"] = d["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    if not download_df.empty and "timestamp" in download_df.columns:
+        download_df["timestamp"] = download_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
     # Clean file name string (e.g., "Green Bridge" -> "green_bridge")
     safe_name = selected_location.lower().replace(" ", "_").replace("#", "")
 
-    dl_col1, dl_col2, dl_col3, _ = st.columns([1, 1, 1, 3])
-
-    with dl_col1:
+    dl_col, _ = st.columns([4, 1])
+    with dl_col:
         st.download_button(
-            label="Download 1 Week CSV",
-            data=df_1w.to_csv(index=False).encode('utf-8'),
-            file_name=f"{safe_name}_1week_data.csv",
+            label=f"Download CSV ({describe_range(current_range)})",
+            data=download_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{safe_name}_{range_file_suffix(current_range)}_data.csv",
             mime="text/csv",
-            key="dl_1w"
+            key="dl_selected",
+            disabled=download_df.empty,
+            use_container_width=True,
         )
-
-    with dl_col2:
-        st.download_button(
-            label="Download 3 Days CSV",
-            data=df_3d.to_csv(index=False).encode('utf-8'),
-            file_name=f"{safe_name}_3days_data.csv",
-            mime="text/csv",
-            key="dl_3d"
-        )
-
-    with dl_col3:
-        st.download_button(
-            label="Download 24 Hours CSV",
-            data=df_24h.to_csv(index=False).encode('utf-8'),
-            file_name=f"{safe_name}_24hours_data.csv",
-            mime="text/csv",
-            key="dl_24h"
-        )
-
-st.subheader("Rainfall / Device Analytics")
-rain_tab, acc_tab = st.tabs(["Total Rain", "Accumulated Rain"])
+st.subheader("Campus Rainfall Data")
+st.write("These charts show rainfall measured by the campus rain sensor over the past week.")
+acc_tab, rain_tab = st.tabs(["Accumulated Rain", "Total Rain"])
 
 with rain_tab:
     st.plotly_chart(rt_fig, width='stretch')
