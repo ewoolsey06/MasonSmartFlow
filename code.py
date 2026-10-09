@@ -40,6 +40,17 @@ SENSOR_CONFIG = {
     "Aquatic Center": "22406677-1",
 }
 
+# Image mapping for each sensor (assuming image files are in an 'images' subfolder)
+SENSOR_IMAGES = {
+    "Green Bridge": "pictures/Green Bridge.png",
+    "Mason Pond": "pictures/Mason Pond.png",
+    "The Hub": "pictures/The Hub.png",
+    "RAC Sensor": "pictures/The RAC.png",
+    "Lot C #1": "pictures/Lot C1.png",
+    "Lot C #2": "pictures/Lot C2.png",
+    "Aquatic Center": "pictures/Aquatic Center.png",
+}
+
 RAIN_SENSORS = ["22334782-1", "22334782-2"]
 NEEDED_SERIALS = {sn.rsplit("-", 1)[0] for sn in [*SENSOR_CONFIG.values(), *RAIN_SENSORS]}
 
@@ -658,9 +669,7 @@ if selected_location is not None:
 
     st.plotly_chart(sensor_fig, width='stretch')
 
-    # --- CSV Download Section (single button, matches the selected time frame) ---
-    st.markdown("<p style='margin-top: 10px; font-weight: 600;'>Download Data</p>", unsafe_allow_html=True)
-
+# --- CSV Download & Sensor Photo Section ---
     current_range = st.session_state["graph_range"]
     download_df = selected_df.reset_index()
 
@@ -671,8 +680,11 @@ if selected_location is not None:
     # Clean file name string (e.g., "Green Bridge" -> "green_bridge")
     safe_name = selected_location.lower().replace(" ", "_").replace("#", "")
 
-    dl_col, _ = st.columns([4, 1])
-    with dl_col:
+    # Layout: Download section on the left, Photo on the right, vertically centered together
+    left_col, img_col = st.columns([5, 1])
+    
+    with left_col:
+        st.markdown("<p style='margin: 0 0 8px 0; font-weight: 600;'>Download Data</p>", unsafe_allow_html=True)
         st.download_button(
             label=f"Download CSV ({describe_range(current_range)})",
             data=download_df.to_csv(index=False).encode("utf-8"),
@@ -682,6 +694,18 @@ if selected_location is not None:
             disabled=download_df.empty,
             use_container_width=True,
         )
+
+    with img_col:
+        image_path = SENSOR_IMAGES.get(selected_location)
+        if image_path:
+            try:
+                # Displays small image; native Streamlit UI adds full-screen expander on hover
+                st.image(image_path, caption=selected_location, use_container_width=True)
+            except Exception:
+                st.caption("Photo unavailable")
+        else:
+            st.caption("No image set")
+
 st.subheader("Campus Rainfall Data")
 st.write("These charts show rainfall measured by the campus rain sensor over the past week.")
 acc_tab, rain_tab = st.tabs(["Accumulated Rain", "Total Rain"])
