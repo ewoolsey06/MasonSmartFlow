@@ -133,7 +133,7 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(picked_frames, ignore_index=True)
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner="Live data will be available momentarily.")
 def load_all_device_data(start_dt: datetime, end_dt: datetime):
     devices = fetch_devices()
 
