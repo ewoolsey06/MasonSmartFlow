@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 # Define Eastern Time Zone (handles both EST and EDT automatically)
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -410,6 +411,7 @@ def set_selected(location: str):
     st.session_state["selected_location"] = location
     st.session_state["graph_range"] = DEFAULT_RANGE  # reset to 3 Days whenever a new sensor is picked
     st.session_state["button_clicked"] = True
+    st.session_state["scroll_to_plot"] = True
 
 
 def set_graph_range(range_label: str):
@@ -454,6 +456,7 @@ else:
             clicked_name = matches.iloc[0]["name"]
             if clicked_name != st.session_state.get("selected_location"):
                 st.session_state["graph_range"] = DEFAULT_RANGE
+                st.session_state["scroll_to_plot"] = True
             st.session_state["selected_location"] = clicked_name
 
 
@@ -464,7 +467,34 @@ if st.session_state.get("selected_location"):
 selected_location = st.session_state.get("selected_location")
 
 if selected_location is not None:
+    # Invisible anchor to scroll to
+    st.markdown(
+        "<div id='sensor-plot-anchor' style='scroll-margin-top: 60px;'></div>",
+        unsafe_allow_html=True,
+    )
     st.subheader(f"{selected_location} Water Depth")
+
+    # Fire the scroll once, then clear the flag
+    if st.session_state.pop("scroll_to_plot", False):
+        components.html(
+            f"""
+            <script>
+            // {selected_location} {time.time()}
+            const tryScroll = (n) => {{
+                const el = window.parent.document.getElementById("sensor-plot-anchor");
+                if (el) {{
+                    el.scrollIntoView({{behavior: "smooth", block: "start"}});
+                }} else if (n > 0) {{
+                    setTimeout(() => tryScroll(n - 1), 100);
+                }}
+            }};
+            tryScroll(20);
+            </script>
+            """,
+            height=0,
+        )
+
+    # ... rest of your existing code (CSS, range buttons, chart, downloads)
 
     # Custom CSS to shrink buttons and tighten vertical margins
     st.markdown(
