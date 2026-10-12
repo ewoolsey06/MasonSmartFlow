@@ -695,7 +695,7 @@ if selected_location is not None:
             disabled=download_df.empty,
             use_container_width=True,
         )
-with img_col:
+    with img_col:
         image_path = SENSOR_IMAGES.get(selected_location)
         if image_path:
             try:
