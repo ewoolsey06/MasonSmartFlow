@@ -143,13 +143,13 @@ WATERSHED_LAYERS = {
     "Storm Inlets": {
         "file": "LAYERS/Inlets.geojson",
         "geom_type": "point",
-        "color": "#7f2704",
-        "fill_color": "#eca137",
+        "color": "#850543",
+        "fill_color": "#f7319e",
         "radius": 1.5,
         "tooltip_fields": ["Inlet_ID", "Type"],
         "legend_symbol": (
             "<span style='display:inline-block;width:10px;height:10px;"
-            "background:#fdae6b;border:1.5px solid #7f2704;"
+            "background:#f7319e;border:1.5px solid #850543;"
             "vertical-align:middle;margin-right:6px;'></span>"
         ),
     },
