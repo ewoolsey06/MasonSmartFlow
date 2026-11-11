@@ -93,7 +93,7 @@ WATERSHED_LAYERS = {
         ),
     },
     "Stormwater BMPs": {
-        "file": "LAYERS/BMP.geojson",
+        "file": "LAYERS/BMPS.geojson",
         "geom_type": "point",
         "color": "#006d2c",
         "fill_color": "#2b8cbe",
