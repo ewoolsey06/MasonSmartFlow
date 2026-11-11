@@ -1,3 +1,4 @@
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -16,21 +17,20 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║  MAX WINDOW LIMIT  <-- CHANGE THIS TO 30 LATER                   ║
-# ║  Max days of data a user can request per sensor. This also       ║
+# ║  Max days of data a user can request per live sensor. This also  ║
 # ║  controls how much history is fetched from the LI-COR API.       ║
 # ╚══════════════════════════════════════════════════════════════════╝
 MAX_WINDOW_DAYS = 7
 
+# try:
+#     TOKEN = st.secrets["TOKEN"]
+# except (KeyError, FileNotFoundError):
+#     st.error("Missing TOKEN. Add it to .streamlit/secrets.toml or your Streamlit Cloud secrets.")
+#     st.stop()
 
-#try:
-    #TOKEN = st.secrets["TOKEN"]
-#except (KeyError, FileNotFoundError):
-    #st.error("Missing TOKEN. Add it to .streamlit/secrets.toml or your Streamlit Cloud secrets.")
-    #st.stop()
+TOKEN = "5tqw7ssFj2v3jUer2jp3AMENZp1FqIkwUJ0AHhC7ps9ep6gh"
 
-TOKEN="5tqw7ssFj2v3jUer2jp3AMENZp1FqIkwUJ0AHhC7ps9ep6gh"
-
-# Water depth sensors: name -> sensor_sn
+# Live water depth sensors: name -> sensor_sn
 SENSOR_CONFIG = {
     "Green Bridge": "22406680-1",
     "Mason Pond": "22406678-1",
@@ -41,7 +41,41 @@ SENSOR_CONFIG = {
     "Aquatic Center": "22406677-1",
 }
 
-# Image mapping for each sensor (assuming image files are in an 'images' subfolder)
+# Historical CSV water depth sensors configuration
+HISTORICAL_CONFIG = {
+    "Eagle Bank": {
+        "file": "Eagle_bank.csv",
+        "time_col": "Date-Time (EST/EDT)",
+        "val_col": "Water Level , ft",
+        "convert_m_to_ft": False,
+    },
+    "Lot J": {
+        "file": "Lot_k_j.csv",
+        "time_col": "Date",
+        "val_col": "Water level Lot J",
+        "convert_m_to_ft": False,
+    },
+    "Lot K": {
+        "file": "Lot_k_j.csv",
+        "time_col": "Date",
+        "val_col": "Water Level Lot K",
+        "convert_m_to_ft": False,
+    },
+    "East Campus Upstream": {
+        "file": "East_campus_upstream.csv",
+        "time_col": "Date-Time (EST/EDT)",
+        "val_col": "Water Level , m",
+        "convert_m_to_ft": True,  # Converts meters to feet (* 3.28084)
+    },
+    "East Campus Downstream": {
+        "file": "East_campus_downstream.csv",
+        "time_col": "Date-Time (EST/EDT)",
+        "val_col": "Water Level , m",
+        "convert_m_to_ft": True,  # Converts meters to feet (* 3.28084)
+    },
+}
+
+# Image mapping for each sensor
 SENSOR_IMAGES = {
     "Green Bridge": "pictures/Green Bridge.png",
     "Mason Pond": "pictures/Mason Pond.png",
@@ -60,12 +94,9 @@ headers = {
 }
 
 if "data_window" not in st.session_state:
-    # Round "now" down to the half hour so every session shares the same cache key
     now = datetime.now(EASTERN_TZ)
     end = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
-    # ╔═══ MAX WINDOW LIMIT (fetch side) ═══╗
-    start = end - timedelta(days=MAX_WINDOW_DAYS + 1)  # +1 day of buffer (was hardcoded 8)
-    # ╚═════════════════════════════════════╝
+    start = end - timedelta(days=MAX_WINDOW_DAYS + 1)
     st.session_state["data_window"] = {
         "start": start,
         "end": end
@@ -89,12 +120,11 @@ def fetch_devices():
     return response.json().get("devices", [])
 
 
-MAX_WORKERS = 4  # parallel requests; lower this if the API starts returning 429s
+MAX_WORKERS = 4
 API_DATA_URL = "https://api.licor.cloud/v1/data"
 
 
 def fetch_device_data(session: requests.Session, serial: str, start_dt: str, end_dt: str):
-    """Plain function (no st.* calls, no st.cache) so it is safe to run in worker threads."""
     params = {
         "loggers": serial,
         "start_date_time": start_dt,
@@ -103,7 +133,7 @@ def fetch_device_data(session: requests.Session, serial: str, start_dt: str, end
 
     for attempt in range(3):
         response = session.get(API_DATA_URL, headers=headers, params=params, timeout=30)
-        if response.status_code == 429:  # rate limited: back off and retry
+        if response.status_code == 429:
             time.sleep(2 ** attempt)
             continue
         break
@@ -127,10 +157,6 @@ def daterange_chunks(start_dt: datetime, end_dt: datetime, chunk_days: int = 1):
 
 
 def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
-    """
-    Keep one reading every 30 minutes, per sensor, anchored to actual clock
-    time (:00 and :30) in Eastern Time.
-    """
     if df_chunk.empty:
         return df_chunk
 
@@ -163,8 +189,6 @@ def keep_half_hour_marks(df_chunk: pd.DataFrame) -> pd.DataFrame:
 def load_all_device_data(start_dt: datetime, end_dt: datetime):
     devices = fetch_devices()
 
-    # Only fetch devices we actually use (sensor_sn looks like "<device serial>-<n>").
-    # Falls back to all devices if the serial format doesn't match.
     wanted = [d for d in devices if d["deviceSerialNumber"] in NEEDED_SERIALS]
     devices = wanted or devices
 
@@ -179,7 +203,7 @@ def load_all_device_data(start_dt: datetime, end_dt: datetime):
         for cs, ce in chunks
     ]
 
-    session = requests.Session()  # reuses connections across requests
+    session = requests.Session()
 
     def work(task):
         try:
@@ -187,7 +211,6 @@ def load_all_device_data(start_dt: datetime, end_dt: datetime):
         except (RuntimeError, requests.RequestException) as exc:
             return [], str(exc)
 
-    # Same 1-day chunks as before, just a few in flight at a time
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         results = list(pool.map(work, tasks))
 
@@ -201,8 +224,41 @@ def load_all_device_data(start_dt: datetime, end_dt: datetime):
     if not frames:
         return pd.DataFrame()
 
-    # Downsample once on the full dataset instead of once per chunk
     return keep_half_hour_marks(pd.concat(frames, ignore_index=True))
+
+
+@st.cache_data
+def load_historical_data():
+    """Load and standardize water depth data from local historical CSV files."""
+    hist_data = {}
+    for name, cfg in HISTORICAL_CONFIG.items():
+        filepath = cfg["file"]
+        if not os.path.exists(filepath):
+            hist_data[name] = pd.DataFrame(columns=["value"])
+            continue
+
+        raw = pd.read_csv(filepath)
+        t_col = cfg["time_col"]
+        v_col = cfg["val_col"]
+
+        if t_col == "Date":
+            ts = pd.to_datetime(
+                raw[t_col], format="%y-%m-%d %H:%M:%S %z", utc=True
+            ).dt.tz_convert(EASTERN_TZ)
+        else:
+            ts = pd.to_datetime(
+                raw[t_col], format="%m/%d/%Y %H:%M:%S"
+            ).dt.tz_localize(EASTERN_TZ, ambiguous="NaT", nonexistent="shift_forward")
+
+        vals = pd.to_numeric(raw[v_col], errors="coerce")
+        if cfg.get("convert_m_to_ft"):
+            vals = vals * 3.28084
+
+        sdf = pd.DataFrame({"timestamp": ts, "value": vals}).dropna(subset=["timestamp", "value"])
+        sdf = sdf.sort_values("timestamp").set_index("timestamp")
+        hist_data[name] = sdf
+
+    return hist_data
 
 
 try:
@@ -210,7 +266,6 @@ try:
 except RuntimeError as exc:
     st.error(str(exc))
     st.stop()
-
 
 if df.empty:
     st.text("No data returned from any devices.")
@@ -225,7 +280,6 @@ DEFAULT_RANGE = "3 Days"
 
 
 def compute_y_range(values: pd.Series, pad_frac: float = 0.05):
-    """Y-axis range from the min/max of the whole dataset, with a little padding."""
     if values.empty:
         return [-0.01, 0.8]
 
@@ -241,10 +295,10 @@ def compute_y_range(values: pd.Series, pad_frac: float = 0.05):
 
 
 def filter_by_range(sensor_df: pd.DataFrame, range_label: str) -> pd.DataFrame:
-    """Slice a sensor's full-range data down to the selected window.
-    Presets are anchored to the sensor's own most recent reading;
-    "Custom" uses the absolute Eastern-time window the user chose."""
     if sensor_df.empty:
+        return sensor_df
+
+    if range_label == "All Data":
         return sensor_df
 
     if range_label == "Custom":
@@ -252,32 +306,35 @@ def filter_by_range(sensor_df: pd.DataFrame, range_label: str) -> pd.DataFrame:
         if custom:
             c_start, c_end = custom
             return sensor_df[(sensor_df.index >= c_start) & (sensor_df.index <= c_end)]
-        range_label = DEFAULT_RANGE  # fallback if nothing was set
+        range_label = DEFAULT_RANGE
 
     latest = sensor_df.index.max()
     cutoff = latest - RANGE_OPTIONS.get(range_label, RANGE_OPTIONS[DEFAULT_RANGE])
     return sensor_df[sensor_df.index >= cutoff]
 
 
-def describe_range(range_label: str) -> str:
-    """Human-readable label for titles and buttons."""
+def describe_range(range_label: str, sensor_df: pd.DataFrame = None) -> str:
     if range_label == "Custom" and st.session_state.get("custom_range"):
         c_start, c_end = st.session_state["custom_range"]
         return f"{c_start:%b %d %H:%M} – {c_end:%b %d %H:%M}"
+    if range_label == "All Data" and sensor_df is not None and not sensor_df.empty:
+        return f"All Data ({sensor_df.index.min():%b %d} – {sensor_df.index.max():%b %d})"
     return range_label
 
 
 def range_file_suffix(range_label: str) -> str:
-    """Filename-safe label for the downloaded CSV."""
     if range_label == "Custom" and st.session_state.get("custom_range"):
         c_start, c_end = st.session_state["custom_range"]
         return f"{c_start:%Y%m%d_%H%M}_to_{c_end:%Y%m%d_%H%M}"
     return range_label.lower().replace(" ", "_")
 
 
-def build_sensor_figure(sensor_df: pd.DataFrame, name: str, y_range, range_label: str) -> go.Figure:
+def build_sensor_figure(
+    sensor_df: pd.DataFrame, name: str, y_range, range_label: str, is_historical: bool = False
+) -> go.Figure:
     filtered = filter_by_range(sensor_df, range_label)
-    display_label = describe_range(range_label)
+    display_label = describe_range(range_label, sensor_df)
+    line_color = "#E06D06" if is_historical else "#005138"
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -285,10 +342,10 @@ def build_sensor_figure(sensor_df: pd.DataFrame, name: str, y_range, range_label
         y=filtered["value"] if "value" in filtered else [],
         mode='lines',
         name=name,
-        line=dict(color='#005138', width=0.75)
+        line=dict(color=line_color, width=0.85)
     ))
     fig.update_layout(
-        title=f"{name} Data ({display_label}) - Eastern Time",
+        title=f"{name} {'Historical ' if is_historical else ''}Data ({display_label}) - Eastern Time",
         xaxis_title=f"Time ({display_label} EST/EDT)",
         yaxis_title="Water Depth (ft)",
         hovermode='x unified',
@@ -303,6 +360,7 @@ def build_sensor_figure(sensor_df: pd.DataFrame, name: str, y_range, range_label
 sensor_data = {}
 sensor_y_range = {}
 
+# Load live sensors
 for sensor_name, sensor_sn in SENSOR_CONFIG.items():
     sdf = df[df["sensor_sn"] == sensor_sn].copy()
 
@@ -318,13 +376,43 @@ for sensor_name, sensor_sn in SENSOR_CONFIG.items():
     sensor_data[sensor_name] = sdf
     sensor_y_range[sensor_name] = compute_y_range(sdf["value"])
 
-# Map
+# Load historical sensors
+historical_sensor_data = load_historical_data()
+for h_name, hdf in historical_sensor_data.items():
+    sensor_data[h_name] = hdf
+    sensor_y_range[h_name] = compute_y_range(hdf["value"]) if not hdf.empty else [-0.01, 0.8]
+
+# Live Map Locations
 locations_df = pd.DataFrame({
     'name': ['Green Bridge', 'Mason Pond', 'The Hub', 'RAC Sensor', 'Lot C #1', 'Lot C #2', 'Aquatic Center'],
     'lat': [38.827153, 38.829022, 38.83019, 38.830625, 38.825383, 38.825994, 38.826328],
     'lon': [-77.30703, -77.310372, -77.30398, -77.310689, -77.303769, -77.304797, -77.303419]
 })
 
+# Historical Map Locations
+historical_locations_df = pd.DataFrame({
+    'name': [
+        'Eagle Bank',
+        'Lot J',
+        'Lot K',
+        'East Campus Upstream',
+        'East Campus Downstream',
+    ],
+    'lat': [
+        38.827209,
+        38.828452,
+        38.828107,
+        38.830417,
+        38.831483,
+    ],
+    'lon': [
+        -77.307573,
+        -77.311759,
+        -77.311557,
+        -77.303741,
+        -77.303637,
+    ]
+})
 
 # Rain sensor
 rain_total = df[
@@ -338,10 +426,7 @@ rain_total = rain_total.sort_values("timestamp")
 rain_total["timestamp"] = pd.to_datetime(rain_total["timestamp"])
 rain_total = rain_total.set_index("timestamp")
 
-
-# Plot
 rt_fig = go.Figure()
-
 rt_fig.add_trace(go.Bar(
     x=rain_total.index,
     y=rain_total["value"],
@@ -353,7 +438,6 @@ rt_fig.add_trace(go.Bar(
     ),
     opacity=1
 ))
-
 rt_fig.update_layout(
     title="Rainfall Totals (Eastern Time)",
     xaxis_title="Day (last week EST/EDT)",
@@ -365,7 +449,6 @@ rt_fig.update_layout(
     paper_bgcolor='white',
     plot_bgcolor='white'
 )
-
 
 # Accumulated Rain sensor
 rain_acc = df[
@@ -380,10 +463,7 @@ rain_acc = rain_acc.sort_values("timestamp")
 rain_acc["timestamp"] = pd.to_datetime(rain_acc["timestamp"])
 rain_acc = rain_acc.set_index("timestamp")
 
-
-# Plot
 ra_fig = go.Figure()
-
 ra_fig.add_trace(go.Bar(
     x=rain_acc.index,
     y=rain_acc["value"],
@@ -395,7 +475,6 @@ ra_fig.add_trace(go.Bar(
     ),
     opacity=1
 ))
-
 ra_fig.update_layout(
     title="Accumulated Rainfall Totals (Eastern Time)",
     xaxis_title="Day (last week EST/EDT)",
@@ -408,54 +487,6 @@ ra_fig.update_layout(
     plot_bgcolor='white'
 )
 
-st.markdown(
-    """
-    <style>
-    :root {
-        --st-primary-color: #005138 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-st.subheader("Fairfax Campus Sensor Location Map")
-st.write("Click on any marker on the map or use the buttons to view the sensor's name and to display its specific water depth data")
-
-center_lat = locations_df["lat"].mean()
-center_lon = locations_df["lon"].mean()
-bounds = [[row["lat"], row["lon"]] for _, row in locations_df.iterrows()]
-
-m = folium.Map(
-    location=[center_lat, center_lon],
-    zoom_start=16,
-    tiles="OpenStreetMap"
-)
-
-for _, row in locations_df.iterrows():
-    folium.CircleMarker(
-        location=[row['lat'], row['lon']],
-        radius=8,
-        popup=row['name'],
-        tooltip=f"Click to view {row['name']}",
-        color="#01090F",
-        fill=True,
-        fill_color="#23631B",
-        fill_opacity=0.7
-    ).add_to(m)
-
-    folium.CircleMarker(
-        location= ['38.825153','-77.303136'],
-        radius=8,
-        popup="Rainfall Sensor",
-        tooltip=f"Scroll down to view campus rainfall data.",
-        color="#01090F",
-        fill=True,
-        fill_color="#318ece",
-        fill_opacity=0.7
-    ).add_to(m)
-
 # Session state defaults
 if "selected_location" not in st.session_state:
     st.session_state["selected_location"] = None
@@ -467,63 +498,268 @@ if "custom_range" not in st.session_state:
     st.session_state["custom_range"] = None
 if "custom_error" not in st.session_state:
     st.session_state["custom_error"] = None
+if "show_historical" not in st.session_state:
+    st.session_state["show_historical"] = False
+
+# Universal CSS targeting `.stButton button` (works across all Streamlit versions)
+st.markdown(
+    """
+    <style>
+    :root {
+        --st-primary-color: #005138 !important;
+    }
+
+    /* Force all Streamlit buttons to allow multi-line text wrapping with compact height */
+    .stButton > button,
+    div[data-testid="stButton"] > button {
+        height: auto !important;
+        min-height: 40px !important;
+        padding: 4px 6px !important;
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        line-height: 1.15 !important;
+    }
+
+    /* Target all inner elements (div, p, span) inside Streamlit buttons so ellipsis/nowrap is disabled */
+    .stButton > button *,
+    div[data-testid="stButton"] > button * {
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        line-height: 1.15 !important;
+        font-size: 0.8rem !important;
+        text-align: center !important;
+        margin: 0 !important;
+    }
+
+    /* Keep download button on single line */
+    .stDownloadButton > button,
+    div[data-testid="stDownloadButton"] > button {
+        white-space: nowrap !important;
+        width: auto !important;
+        min-width: 100% !important;
+    }
+    .stDownloadButton > button *,
+    div[data-testid="stDownloadButton"] > button * {
+        white-space: nowrap !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def format_btn_label(name: str) -> str:
+    """Insert a clean line break for multi-word sensor names so they stack neatly on 2 lines."""
+    explicit_breaks = {
+        "Green Bridge": "Green\nBridge",
+        "Mason Pond": "Mason\nPond",
+        "RAC Sensor": "RAC\nSensor",
+        "Aquatic Center": "Aquatic\nCenter",
+        "Eagle Bank": "Eagle\nBank",
+        "East Campus Upstream": "East Campus\nUpstream",
+        "East Campus Downstream": "East Campus\nDownstream",
+    }
+    return explicit_breaks.get(name, name)
+
+
+def toggle_historical():
+    st.session_state["show_historical"] = not st.session_state["show_historical"]
+    st.session_state["button_clicked"] = True
+    if (
+        not st.session_state["show_historical"]
+        and st.session_state.get("selected_location") in HISTORICAL_CONFIG
+    ):
+        st.session_state["selected_location"] = None
 
 
 def set_selected(location: str):
     st.session_state["selected_location"] = location
-    st.session_state["graph_range"] = DEFAULT_RANGE  # reset to 3 Days whenever a new sensor is picked
+    if location in HISTORICAL_CONFIG:
+        st.session_state["graph_range"] = "All Data"
+    else:
+        st.session_state["graph_range"] = DEFAULT_RANGE
     st.session_state["custom_range"] = None
     st.session_state["custom_error"] = None
     st.session_state["button_clicked"] = True
-    st.session_state["scroll_to_plot"] = True  # trigger auto-scroll to the plot
+    st.session_state["scroll_to_plot"] = True
 
 
 def set_graph_range(range_label: str):
     st.session_state["graph_range"] = range_label
     st.session_state["custom_error"] = None
-    st.session_state["button_clicked"] = True  # don't let the map click re-processing override this
+    st.session_state["button_clicked"] = True
 
 
-def apply_custom_range(key: str):
+def apply_custom_range(key: str, is_historical: bool = False):
     s = st.session_state
-    s["button_clicked"] = True  # don't let the map click re-processing override this
+    s["button_clicked"] = True
 
     start_dt = datetime.combine(s[f"{key}_sd"], s[f"{key}_st"], tzinfo=EASTERN_TZ)
     end_dt = datetime.combine(s[f"{key}_ed"], s[f"{key}_et"], tzinfo=EASTERN_TZ)
 
     if end_dt <= start_dt:
         s["custom_error"] = "End time must be after start time."
-    # ╔═══════════ MAX WINDOW LIMIT (validation side) ═══════════╗
-    elif end_dt - start_dt > timedelta(days=MAX_WINDOW_DAYS):
+    elif not is_historical and (end_dt - start_dt > timedelta(days=MAX_WINDOW_DAYS)):
         s["custom_error"] = f"Please request a timeframe within the {MAX_WINDOW_DAYS} days or less."
-    # ╚══════════════════════════════════════════════════════════╝
     else:
         s["custom_error"] = None
         s["custom_range"] = (start_dt, end_dt)
         s["graph_range"] = "Custom"
 
 
-# Render buttons next to the map using columns
-left_col, right_col = st.columns([1, 3])
+st.subheader("Fairfax Campus Sensor Location Map")
+st.write(
+    "Click on any marker on the map or use the buttons below to view the sensor's name "
+    "and to display its specific water depth data."
+)
 
-with left_col:
-    left_col.markdown(
-        "<p style='margin: 0 0 4px 0; font-size: 1.1rem; font-weight: 600;'>Select Sensor</p>",
-        unsafe_allow_html=True
+# ─── Top Control Bar: Legend + Bold/Outlined Historical Toggle Button ───
+ctrl_left, ctrl_right = st.columns([3.0, 1.4])
+with ctrl_left:
+    st.markdown(
+        "<div style='display:flex; gap:16px; align-items:center; padding-top:6px; font-size:0.9rem;'>"
+        "<span><span style='display:inline-block;width:12px;height:12px;border-radius:50%;background:#23631B;border:1px solid #01090F;margin-right:5px;'></span>Live Water Sensor</span>"
+        "<span><span style='display:inline-block;width:12px;height:12px;border-radius:50%;background:#E06D06;border:1px solid #01090F;margin-right:5px;'></span>Historical Water Sensor</span>"
+        "<span><span style='display:inline-block;width:12px;height:12px;border-radius:50%;background:#318ece;border:1px solid #01090F;margin-right:5px;'></span>Rainfall Sensor</span>"
+        "</div>",
+        unsafe_allow_html=True,
     )
-    left_col.button("Green Bridge", key="inline_green", on_click=set_selected, args=("Green Bridge",))
-    left_col.button("Mason Pond", key="inline_mason", on_click=set_selected, args=("Mason Pond",))
-    left_col.button("The Hub", key="inline_hub", on_click=set_selected, args=("The Hub",))
-    left_col.button("RAC Sensor", key="inline_rac", on_click=set_selected, args=("RAC Sensor",))
-    left_col.button("Lot C #1", key="inline_lot_c1", on_click=set_selected, args=("Lot C #1",))
-    left_col.button("Lot C #2", key="inline_lot_c2", on_click=set_selected, args=("Lot C #2",))
-    left_col.button("Aquatic Center", key="inline_aquatic_center", on_click=set_selected, args=("Aquatic Center",))
+with ctrl_right:
+    hist_btn_label = (
+        "**Hide Historical Data**"
+        if st.session_state["show_historical"]
+        else "**See Historical Data**"
+    )
+    st.button(
+        hist_btn_label,
+        key="toggle_hist_btn",
+        on_click=toggle_historical,
+        type="primary" if st.session_state["show_historical"] else "secondary",
+        use_container_width=True,
+    )
 
-# Keep the selected label inside the same left column
-selection_placeholder = left_col.empty()
+# JS hook to ensure the "See/Hide Historical Data" button gets a bold 2.5px outline
+hist_outline_color = "#E06D06" if st.session_state["show_historical"] else "#005138"
+components.html(
+    f"""
+    <script>
+    const styleHistBtn = () => {{
+        const btns = window.parent.document.querySelectorAll('button');
+        btns.forEach(btn => {{
+            if (btn.innerText.includes('Historical Data')) {{
+                btn.style.setProperty('border', '2.5px solid {hist_outline_color}', 'important');
+                btn.style.setProperty('font-weight', '800', 'important');
+                btn.style.setProperty('box-shadow', '0 2px 5px rgba(0,0,0,0.18)', 'important');
+            }}
+        }});
+    }};
+    styleHistBtn();
+    setTimeout(styleHistBtn, 150);
+    </script>
+    """,
+    height=0,
+)
 
-with right_col:
-    map_data = st_folium(m, width="100%", height=450, key="map")
+# ─── Live Sensor Buttons (Green Title + Horizontal Row on Top) ───
+st.markdown(
+    "<p style='margin: 8px 0 4px 0; font-size: 0.95rem; font-weight: 600; color: #23631B;'>Live Sensors</p>",
+    unsafe_allow_html=True,
+)
+live_names = list(SENSOR_CONFIG.keys())
+live_cols = st.columns(len(live_names))
+for col, s_name in zip(live_cols, live_names):
+    safe_key = s_name.lower().replace(" ", "_").replace("#", "")
+    with col:
+        st.button(
+            format_btn_label(s_name),
+            key=f"top_{safe_key}",
+            on_click=set_selected,
+            args=(s_name,),
+            use_container_width=True,
+        )
+
+# ─── Historical Sensor Buttons (Separate Horizontal Row on Top when Toggled) ───
+if st.session_state["show_historical"]:
+    st.markdown(
+        "<p style='margin: 10px 0 4px 0; font-size: 0.95rem; font-weight: 600; color: #E06D06;'>Historical Sensors</p>",
+        unsafe_allow_html=True,
+    )
+    hist_names = list(HISTORICAL_CONFIG.keys())
+    hist_cols = st.columns(len(hist_names))
+    for col, h_name in zip(hist_cols, hist_names):
+        safe_key = h_name.lower().replace(" ", "_")
+        with col:
+            st.button(
+                format_btn_label(h_name),
+                key=f"hist_{safe_key}",
+                on_click=set_selected,
+                args=(h_name,),
+                use_container_width=True,
+            )
+
+# Placeholder to display currently selected sensor right above the map
+selection_placeholder = st.empty()
+
+# ─── Full-Width Map ───
+active_locations_df = (
+    pd.concat([locations_df, historical_locations_df], ignore_index=True)
+    if st.session_state["show_historical"]
+    else locations_df
+)
+
+center_lat = active_locations_df["lat"].mean()
+center_lon = active_locations_df["lon"].mean()
+
+m = folium.Map(
+    location=[center_lat, center_lon],
+    zoom_start=16,
+    tiles="OpenStreetMap"
+)
+
+# Live sensor markers (Green)
+for _, row in locations_df.iterrows():
+    folium.CircleMarker(
+        location=[row['lat'], row['lon']],
+        radius=8,
+        popup=row['name'],
+        tooltip=f"Click to view {row['name']} (Live)",
+        color="#01090F",
+        fill=True,
+        fill_color="#23631B",
+        fill_opacity=0.7
+    ).add_to(m)
+
+# Historical sensor markers (Orange - shown only when Historical Data is toggled on)
+if st.session_state["show_historical"]:
+    for _, row in historical_locations_df.iterrows():
+        folium.CircleMarker(
+            location=[row['lat'], row['lon']],
+            radius=8,
+            popup=f"{row['name']} (Historical)",
+            tooltip=f"Click to view {row['name']} (Historical)",
+            color="#01090F",
+            fill=True,
+            fill_color="#E06D06",
+            fill_opacity=0.85
+        ).add_to(m)
+
+# Rainfall sensor marker (Blue)
+folium.CircleMarker(
+    location=[38.825153, -77.303136],
+    radius=8,
+    popup="Rainfall Sensor",
+    tooltip="Scroll down to view campus rainfall data.",
+    color="#01090F",
+    fill=True,
+    fill_color="#318ece",
+    fill_opacity=0.7
+).add_to(m)
+
+map_data = st_folium(m, width="100%", height=500, key="map")
 
 
 if st.session_state["button_clicked"]:
@@ -532,41 +768,51 @@ else:
     if map_data and map_data.get("last_object_clicked"):
         loc = map_data["last_object_clicked"]
 
-        matches = locations_df[
-            (locations_df["lat"].sub(loc.get("lat", 0)).abs() < 0.0005) &
-            (locations_df["lon"].sub(loc.get("lng", 0)).abs() < 0.0005)
-        ]
+        active_with_dist = active_locations_df.copy()
+        active_with_dist["dist"] = (
+            (active_with_dist["lat"] - loc.get("lat", 0)) ** 2
+            + (active_with_dist["lon"] - loc.get("lng", 0)) ** 2
+        ) ** 0.5
+        matches = active_with_dist[active_with_dist["dist"] < 0.0005].sort_values("dist")
 
         if not matches.empty:
             clicked_name = matches.iloc[0]["name"]
             if clicked_name != st.session_state.get("selected_location"):
-                st.session_state["graph_range"] = DEFAULT_RANGE
+                st.session_state["graph_range"] = (
+                    "All Data" if clicked_name in HISTORICAL_CONFIG else DEFAULT_RANGE
+                )
                 st.session_state["custom_range"] = None
                 st.session_state["custom_error"] = None
-                st.session_state["scroll_to_plot"] = True  # trigger auto-scroll to the plot
+                st.session_state["scroll_to_plot"] = True
             st.session_state["selected_location"] = clicked_name
 
 
 if st.session_state.get("selected_location"):
-    selection_placeholder.write(f"**Selected:** {st.session_state['selected_location']}")
+    sel_name = st.session_state["selected_location"]
+    badge = " (Historical)" if sel_name in HISTORICAL_CONFIG else ""
+    selection_placeholder.markdown(
+        f"<p style='margin: 4px 0 6px 0; font-size: 0.95rem;'><b>Selected:</b> {sel_name}{badge}</p>",
+        unsafe_allow_html=True,
+    )
 
 
 selected_location = st.session_state.get("selected_location")
 
 if selected_location is not None:
-    # Invisible anchor to scroll to
+    is_hist = selected_location in HISTORICAL_CONFIG
+
     st.markdown(
         "<div id='sensor-plot-anchor' style='scroll-margin-top: 60px;'></div>",
         unsafe_allow_html=True,
     )
-    st.subheader(f"{selected_location} Water Depth")
+    st.subheader(
+        f"{selected_location} {'Historical ' if is_hist else ''}Water Depth"
+    )
 
-    # Fire the scroll once, then clear the flag
     if st.session_state.pop("scroll_to_plot", False):
         components.html(
             f"""
             <script>
-            // {selected_location} {time.time()}
             const tryScroll = (n) => {{
                 const el = window.parent.document.getElementById("sensor-plot-anchor");
                 if (el) {{
@@ -581,52 +827,31 @@ if selected_location is not None:
             height=0,
         )
 
-    # Custom CSS to shrink buttons and tighten vertical margins
-    st.markdown(
-        """
-        <style>
-        /* Target buttons to shrink height, font, and padding */
-        div[data-testid="column"] button {
-            min-height: 28px !important;
-            height: 28px !important;
-            padding: 0px 8px !important;
-            font-size: 0.8rem !important;
-            line-height: 1 !important;
-            margin-top: -10px !important;
-            margin-bottom: -10px !important;
-        }
-
-        /* Adjust alignment for the caption label */
-        div[data-testid="column"] div[data-testid="stCaptionContainer"] {
-            margin-top: -6px !important;
-        }
-
-        /* Keep download button text on one line */
-        div[data-testid="stDownloadButton"] button {
-         white-space: nowrap !important;
-         width: auto !important;
-         min-width: 100% !important;
-    }
-    div[data-testid="stDownloadButton"] button p {
-        white-space: nowrap !important;
-    }   
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
     curr_df = sensor_data[selected_location]
     key = "cw_" + selected_location.lower().replace(" ", "_").replace("#", "")
 
-    range_col1, range_col2, range_col3, range_col4 = st.columns([1, 1, 1, 3])
-    with range_col1:
-        st.button("1 Week", key="range_1w", on_click=set_graph_range, args=("1 Week",))
-    with range_col2:
-        st.button("3 Days", key="range_3d", on_click=set_graph_range, args=("3 Days",))
-    with range_col3:
-        st.button("24 Hours", key="range_24h", on_click=set_graph_range, args=("24 Hours",))
-    with range_col4:
-        st.caption(f"Showing: {describe_range(st.session_state['graph_range'])}")
+    if is_hist:
+        r_col0, r_col1, r_col2, r_col3, r_col4 = st.columns([1, 1, 1, 1, 2.5])
+        with r_col0:
+            st.button("All Data", key="range_all", on_click=set_graph_range, args=("All Data",))
+        with r_col1:
+            st.button("1 Week", key="range_1w", on_click=set_graph_range, args=("1 Week",))
+        with r_col2:
+            st.button("3 Days", key="range_3d", on_click=set_graph_range, args=("3 Days",))
+        with r_col3:
+            st.button("24 Hours", key="range_24h", on_click=set_graph_range, args=("24 Hours",))
+        with r_col4:
+            st.caption(f"Showing: {describe_range(st.session_state['graph_range'], curr_df)}")
+    else:
+        range_col1, range_col2, range_col3, range_col4 = st.columns([1, 1, 1, 3])
+        with range_col1:
+            st.button("1 Week", key="range_1w", on_click=set_graph_range, args=("1 Week",))
+        with range_col2:
+            st.button("3 Days", key="range_3d", on_click=set_graph_range, args=("3 Days",))
+        with range_col3:
+            st.button("24 Hours", key="range_24h", on_click=set_graph_range, args=("24 Hours",))
+        with range_col4:
+            st.caption(f"Showing: {describe_range(st.session_state['graph_range'], curr_df)}")
 
     # --- Custom time window ---
     with st.expander(
@@ -637,7 +862,7 @@ if selected_location is not None:
             st.info("No data available for this sensor.")
         else:
             earliest, latest = curr_df.index.min(), curr_df.index.max()
-            def_start = max(latest - timedelta(days=3), earliest)
+            def_start = earliest if is_hist else max(latest - timedelta(days=3), earliest)
 
             with st.form(f"{key}_form"):
                 c1, c2, c3, c4 = st.columns(4)
@@ -650,9 +875,18 @@ if selected_location is not None:
                 c4.time_input("End time", value=latest.time(),
                               step=timedelta(minutes=30), key=f"{key}_et")
 
-                st.caption(f"Maximum window: Past {MAX_WINDOW_DAYS} days")
-                st.form_submit_button("Apply custom window",
-                                      on_click=apply_custom_range, args=(key,))
+                if is_hist:
+                    st.caption(
+                        f"Available historical record: {earliest:%b %d, %Y %H:%M} to {latest:%b %d, %Y %H:%M}"
+                    )
+                else:
+                    st.caption(f"Maximum window: Past {MAX_WINDOW_DAYS} days")
+
+                st.form_submit_button(
+                    "Apply custom window",
+                    on_click=apply_custom_range,
+                    args=(key, is_hist),
+                )
 
             if st.session_state.get("custom_error"):
                 st.error(st.session_state["custom_error"])
@@ -661,7 +895,8 @@ if selected_location is not None:
         curr_df,
         selected_location,
         sensor_y_range[selected_location],
-        st.session_state["graph_range"]
+        st.session_state["graph_range"],
+        is_historical=is_hist,
     )
 
     selected_df = filter_by_range(curr_df, st.session_state["graph_range"])
@@ -670,24 +905,23 @@ if selected_location is not None:
 
     st.plotly_chart(sensor_fig, width='stretch')
 
-# --- CSV Download & Sensor Photo Section ---
+    # --- CSV Download & Sensor Photo Section ---
     current_range = st.session_state["graph_range"]
     download_df = selected_df.reset_index()
 
-    # Format timestamp column for clean CSV output
     if not download_df.empty and "timestamp" in download_df.columns:
         download_df["timestamp"] = download_df["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+    if "value" in download_df.columns:
+        download_df = download_df.rename(columns={"value": "water_depth_ft"})
 
-    # Clean file name string (e.g., "Green Bridge" -> "green_bridge")
     safe_name = selected_location.lower().replace(" ", "_").replace("#", "")
 
-    # Layout: Download section on the left, Photo on the right, vertically centered together
-    left_col, img_col = st.columns([5, 1])
-    
-    with left_col:
+    left_dl_col, img_col = st.columns([5, 1])
+
+    with left_dl_col:
         st.markdown("<p style='margin: 0 0 8px 0; font-weight: 650;'>Download Data</p>", unsafe_allow_html=True)
         st.download_button(
-            label=f"Download CSV ({describe_range(current_range)})",
+            label=f"Download CSV ({describe_range(current_range, curr_df)})",
             data=download_df.to_csv(index=False).encode("utf-8"),
             file_name=f"{safe_name}_{range_file_suffix(current_range)}_data.csv",
             mime="text/csv",
@@ -699,11 +933,8 @@ if selected_location is not None:
         image_path = SENSOR_IMAGES.get(selected_location)
         if image_path:
             try:
-                # Open image and force a square aspect ratio (center-cropped)
                 img = Image.open(image_path)
                 square_img = ImageOps.fit(img, (400, 400), Image.Resampling.LANCZOS)
-                
-                # Displays small square image; hover enables full-screen expansion
                 st.image(square_img, caption=selected_location, use_container_width=True)
             except Exception:
                 st.caption("Photo unavailable")
@@ -719,4 +950,4 @@ with rain_tab:
 
 with acc_tab:
     st.plotly_chart(ra_fig, width='stretch')
-
+    
