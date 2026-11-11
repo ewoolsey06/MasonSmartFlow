@@ -92,12 +92,12 @@ WATERSHED_LAYERS = {
             "vertical-align:middle;margin-right:6px;'></span>"
         ),
     },
-    "Stormwater BMPs": {
-        "file": "LAYERS/BMP.geojson",
-        "geom_type": "point",
-        "color": "#006d2c",
+   "Stormwater BMPs": {
+        "file": "LAYERS/BMPS.geojson",
+        "geom_type": "polygon",
+        "color": "#00096d",
         "fill_color": "#2b8cbe",
-        "fill_opacity": 1.0,
+        "fill_opacity": 0.65,
         "weight": 2.0,
         "dash_array": None,
         "tooltip_fields": ["Name", "Type"],
@@ -1165,3 +1165,4 @@ with rain_tab:
 
 with acc_tab:
     st.plotly_chart(ra_fig, width='stretch')
+
