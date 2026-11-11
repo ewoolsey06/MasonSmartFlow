@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -72,6 +73,98 @@ HISTORICAL_CONFIG = {
         "time_col": "Date-Time (EST/EDT)",
         "val_col": "Water Level , m",
         "convert_m_to_ft": True,  # Converts meters to feet (* 3.28084)
+    },
+}
+
+# Campus Watershed GeoJSON Layers Configuration
+WATERSHED_LAYERS = {
+    "Campus Boundary": {
+        "file": "LAYERS/Campus Boundar_FeaturesToJSO.geojson",
+        "geom_type": "polygon",
+        "color": "#333333",
+        "fill_color": "#999999",
+        "fill_opacity": 0.08,
+        "weight": 2.5,
+        "dash_array": "6, 4",
+        "legend_symbol": (
+            "<span style='display:inline-block;width:16px;height:12px;"
+            "background:rgba(153,153,153,0.18);border:2px dashed #333333;"
+            "vertical-align:middle;margin-right:6px;'></span>"
+        ),
+    },
+    "Stormwater BMPs": {
+        "file": "LAYERS/BMP.geojson",
+        "geom_type": "point",
+        "color": "#006d2c",
+        "fill_color": "#2b8cbe",
+        "fill_opacity": 1.0,
+        "weight": 2.0,
+        "dash_array": None,
+        "tooltip_fields": ["Name", "Type"],
+        "legend_symbol": (
+            "<span style='display:inline-block;width:16px;height:12px;"
+            "background:rgba(43,140,190,0.55);border:2px solid #006d2c;"
+            "vertical-align:middle;margin-right:6px;'></span>"
+        ),
+    },
+    "Campus Streams": {
+        "file": "LAYERS/Streams.geojson",
+        "geom_type": "line",
+        "color": "#08519c",
+        "weight": 3.0,
+        "dash_array": None,
+        "legend_symbol": (
+            "<span style='display:inline-block;width:18px;height:0;"
+            "border-top:3.5px solid #08519c;vertical-align:middle;margin-right:6px;'></span>"
+        ),
+    },
+    "Culverts": {
+        "file": "LAYERS/Culverts.geojson",
+        "geom_type": "line",
+        "color": "#88419d",
+        "weight": 3.5,
+        "dash_array": None,
+        "legend_symbol": (
+            "<span style='display:inline-block;width:18px;height:0;"
+            "border-top:3.5px solid #88419d;vertical-align:middle;margin-right:6px;'></span>"
+        ),
+    },
+    "Storm Pipes": {
+        "file": "LAYERS/Storm_Pipes.geojson",
+        "geom_type": "line",
+        "color": "#636363",
+        "weight": 1.8,
+        "dash_array": "4, 4",
+        "legend_symbol": (
+            "<span style='display:inline-block;width:18px;height:0;"
+            "border-top:2.5px dashed #636363;vertical-align:middle;margin-right:6px;'></span>"
+        ),
+    },
+    "Storm Inlets": {
+        "file": "LAYERS/Inlets.geojson",
+        "geom_type": "point",
+        "color": "#7f2704",
+        "fill_color": "#eca137",
+        "radius": 1.5,
+        "tooltip_fields": ["Inlet_ID", "Type"],
+        "legend_symbol": (
+            "<span style='display:inline-block;width:10px;height:10px;"
+            "background:#fdae6b;border:1.5px solid #7f2704;"
+            "vertical-align:middle;margin-right:6px;'></span>"
+        ),
+    },
+    "Storm Outlets": {
+        "file": "LAYERS/Outlets.geojson",
+        "geom_type": "point",
+        "color": "#015655",
+        "fill_color": "#06d2b0",
+        "radius":  1.5,
+        "tooltip_fields": ["Type", "StrType"],
+        "legend_symbol": (
+            "<span style='display:inline-block;width:10px;height:10px;"
+            "background:#06d2b0;border:1.5px solid #015655;"
+            "vertical-align:middle;margin-right:6px;'></span>"
+        ),
     },
 }
 
@@ -259,6 +352,16 @@ def load_historical_data():
         hist_data[name] = sdf
 
     return hist_data
+
+
+@st.cache_data
+def load_geojson(filename: str):
+    """Load and cache a GeoJSON file from the current directory or 'layers/' subfolder."""
+    for candidate in [filename, os.path.join("layers", filename)]:
+        if os.path.exists(candidate):
+            with open(candidate, "r", encoding="utf-8") as f:
+                return json.load(f)
+    return None
 
 
 try:
@@ -501,6 +604,12 @@ if "custom_error" not in st.session_state:
 if "show_historical" not in st.session_state:
     st.session_state["show_historical"] = False
 
+# Initialize all watershed layer checkboxes to False (off by default)
+for layer_name in WATERSHED_LAYERS:
+    state_key = f"layer_{layer_name}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = False
+
 # Universal CSS targeting `.stButton button` (works across all Streamlit versions)
 st.markdown(
     """
@@ -574,6 +683,11 @@ def toggle_historical():
         and st.session_state.get("selected_location") in HISTORICAL_CONFIG
     ):
         st.session_state["selected_location"] = None
+
+
+def on_layer_toggle():
+    """Prevent old map click coordinates from re-firing when toggling watershed layers."""
+    st.session_state["button_clicked"] = True
 
 
 def set_selected(location: str):
@@ -720,7 +834,62 @@ m = folium.Map(
     tiles="OpenStreetMap"
 )
 
-# Live sensor markers (Green)
+# 1. Add Checked Campus Watershed Layers FIRST (so sensor markers stay on top)
+for layer_name, lcfg in WATERSHED_LAYERS.items():
+    if st.session_state.get(f"layer_{layer_name}", False):
+        gj_data = load_geojson(lcfg["file"])
+        if gj_data is None:
+            st.warning(f"GeoJSON file '{lcfg['file']}' not found for {layer_name}.")
+            continue
+
+        gtype = lcfg["geom_type"]
+        if gtype in ("polygon", "line"):
+            style_dict = {
+                "color": lcfg["color"],
+                "weight": lcfg["weight"],
+                "opacity": 0.9,
+            }
+            if gtype == "polygon":
+                style_dict["fillColor"] = lcfg["fill_color"]
+                style_dict["fillOpacity"] = lcfg["fill_opacity"]
+            if lcfg.get("dash_array"):
+                style_dict["dashArray"] = lcfg["dash_array"]
+
+            tooltip_obj = (
+                folium.GeoJsonTooltip(fields=lcfg["tooltip_fields"])
+                if lcfg.get("tooltip_fields")
+                else layer_name
+            )
+            folium.GeoJson(
+                gj_data,
+                name=layer_name,
+                style_function=lambda feature, s=style_dict: s,
+                tooltip=tooltip_obj,
+            ).add_to(m)
+
+        elif gtype == "point":
+            for feat in gj_data.get("features", []):
+                geom = feat.get("geometry") or {}
+                coords = geom.get("coordinates", [])
+                if len(coords) >= 2:
+                    lon_pt, lat_pt = coords[0], coords[1]
+                    props = feat.get("properties") or {}
+                    t_fields = lcfg.get("tooltip_fields", [])
+                    t_parts = [f"{f}: {props.get(f)}" for f in t_fields if props.get(f) not in (None, "", -999)]
+                    tip_text = f"{layer_name} ({', '.join(t_parts)})" if t_parts else layer_name
+
+                    folium.CircleMarker(
+                        location=[lat_pt, lon_pt],
+                        radius=lcfg.get("radius", 4),
+                        color=lcfg["color"],
+                        weight=1.2,
+                        fill=True,
+                        fill_color=lcfg["fill_color"],
+                        fill_opacity=0.85,
+                        tooltip=tip_text,
+                    ).add_to(m)
+
+# 2. Live sensor markers (Green)
 for _, row in locations_df.iterrows():
     folium.CircleMarker(
         location=[row['lat'], row['lon']],
@@ -733,7 +902,7 @@ for _, row in locations_df.iterrows():
         fill_opacity=0.7
     ).add_to(m)
 
-# Historical sensor markers (Orange - shown only when Historical Data is toggled on)
+# 3. Historical sensor markers (Orange - shown only when Historical Data is toggled on)
 if st.session_state["show_historical"]:
     for _, row in historical_locations_df.iterrows():
         folium.CircleMarker(
@@ -747,7 +916,7 @@ if st.session_state["show_historical"]:
             fill_opacity=0.85
         ).add_to(m)
 
-# Rainfall sensor marker (Blue)
+# 4. Rainfall sensor marker (Blue)
 folium.CircleMarker(
     location=[38.825153, -77.303136],
     radius=8,
@@ -760,6 +929,52 @@ folium.CircleMarker(
 ).add_to(m)
 
 map_data = st_folium(m, width="100%", height=500, key="map")
+
+# ─── Campus Watershed Layers (Checkboxes + Visual Legend Below Map) ───
+st.markdown(
+    "<p style='margin: 6px 0 6px 0; font-size: 1.05rem; font-weight: 650;'>Campus Watershed Layers</p>",
+    unsafe_allow_html=True,
+)
+
+layer_items = list(WATERSHED_LAYERS.items())
+row1_items = layer_items[:4]
+row2_items = layer_items[4:]
+
+row1_cols = st.columns(4)
+for col, (lname, lcfg) in zip(row1_cols, row1_items):
+    with col:
+        chk_col, sym_col = st.columns([0.18, 0.82])
+        with chk_col:
+            st.checkbox(
+                lname,
+                key=f"layer_{lname}",
+                on_change=on_layer_toggle,
+                label_visibility="collapsed",
+            )
+        with sym_col:
+            st.markdown(
+                f"<div style='padding-top:3px; font-size:0.88rem; white-space:nowrap;'>"
+                f"{lcfg['legend_symbol']}<b>{lname}</b></div>",
+                unsafe_allow_html=True,
+            )
+
+row2_cols = st.columns(4)
+for col, (lname, lcfg) in zip(row2_cols[:len(row2_items)], row2_items):
+    with col:
+        chk_col, sym_col = st.columns([0.18, 0.82])
+        with chk_col:
+            st.checkbox(
+                lname,
+                key=f"layer_{lname}",
+                on_change=on_layer_toggle,
+                label_visibility="collapsed",
+            )
+        with sym_col:
+            st.markdown(
+                f"<div style='padding-top:3px; font-size:0.88rem; white-space:nowrap;'>"
+                f"{lcfg['legend_symbol']}<b>{lname}</b></div>",
+                unsafe_allow_html=True,
+            )
 
 
 if st.session_state["button_clicked"]:
@@ -950,4 +1165,3 @@ with rain_tab:
 
 with acc_tab:
     st.plotly_chart(ra_fig, width='stretch')
-    
